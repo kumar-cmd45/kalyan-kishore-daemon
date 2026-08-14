@@ -1,198 +1,140 @@
 # ==============================================================================
-# KALYAN KISHORE: ZERO-TOUCH AUTONOMOUS ECONOMIC AGENT
+# KALYAN KISHORE: SELF-CONTAINED ECONOMIC & ALGORITHMIC AGENT
 # ==============================================================================
 import os
 import sys
 import json
 import time
-import requests
+import random
 import subprocess
 from groq import Groq
 from google import genai
 from huggingface_hub import HfApi
 
 # 1. Configuration & Secrets
-GITHUB_TOKEN = os.environ.get("GITHUB_PAT", "").strip()
 GROQ_KEY = os.environ.get("GROQ_API_KEY", "").strip()
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 HF_TOKEN = os.environ.get("HF_TOKEN", "").strip()
 VAULT_REPO = "Kumar5674/kalyan-kishore-vault"
 
-# Set your public crypto wallet (USDC on Polygon / Solana / Ethereum)
-# No KYC or bank accounts required.
-PAYOUT_WALLET = os.environ.get("PAYOUT_WALLET", "0xYourPolygonUSDCWalletAddressHere").strip()
-
 groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
 gemini_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
 hf_api = HfApi(token=HF_TOKEN) if HF_TOKEN else None
 
-# 2. Scrape Open GitHub Issues with Bounties
-def fetch_target_bounties(query="language:python label:bounty state:open"):
-    print("🔍 Scanning GitHub ecosystem for active bounties...")
-    headers = {
-        "Authorization": f"Bearer {GITHUB_TOKEN}",
-        "Accept": "application/vnd.github.v3+json"
-    } if GITHUB_TOKEN else {}
-    
-    url = f"https://api.github.com/search/issues?q={query}&sort=updated&order=desc&per_page=5"
-    try:
-        res = requests.get(url, headers=headers, timeout=10).json()
-        items = res.get("items", [])
-        print(f"🎯 Discovered {len(items)} candidate issues.")
-        return items
-    except Exception as e:
-        print(f"⚠️ Search error: {e}")
-        return []
+# High-value algorithmic & quantitative domains
+TASK_DOMAINS = [
+    "algorithmic_order_routing_and_slippage_optimization",
+    "black_scholes_implied_volatility_newton_raphson",
+    "merkle_tree_cryptographic_state_verifier",
+    "asynchronous_rate_limiter_token_bucket",
+    "sparse_matrix_graph_laplacian_eigenvalues",
+    "monte_carlo_var_portfolio_risk_engine",
+    "fast_fourier_transform_signal_denoising"
+]
 
-# 3. Code Generation Waterfall
-def generate_candidate_patch(title: str, body: str) -> str:
+def generate_and_solve_challenge():
+    domain = random.choice(TASK_DOMAINS)
+    print(f"⚡ Target Domain: {domain}")
+
     prompt = (
-        f"You are an expert autonomous software engineer solving a GitHub issue.\n"
-        f"ISSUE TITLE: {title}\n"
-        f"ISSUE BODY:\n{body}\n\n"
+        f"Generate an expert-level, self-contained Python problem and complete solution for domain: {domain}.\n\n"
         "STRICT REQUIREMENTS:\n"
-        "1. Write a complete, self-contained Python patch that fixes the issue.\n"
-        "2. Include 3 strict assertions at the bottom of the script to verify the solution.\n"
-        "3. Output ONLY valid executable Python code without markdown formatting."
+        "1. Standard Python libraries only (numpy, math, typing, collections, hashlib, scipy).\n"
+        "2. The code must contain the complete working implementation.\n"
+        "3. Include at least 4 strict assert statements at the bottom that test edge cases.\n"
+        "4. Output ONLY valid executable Python code without markdown tags."
     )
-    
-    if groq_client:
-        try:
-            res = groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.2,
-                max_tokens=2000
-            )
-            if res.choices and res.choices[0].message.content:
-                return res.choices[0].message.content.replace("```python", "").replace("```", "").strip()
-        except Exception:
-            pass
 
-    if gemini_client:
+    code = None
+    if groq_client:
+        for model in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
+            try:
+                res = groq_client.chat.completions.create(
+                    model=model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.2,
+                    max_tokens=2200
+                )
+                if res.choices and res.choices[0].message.content:
+                    code = res.choices[0].message.content
+                    break
+            except Exception:
+                continue
+
+    if not code and gemini_client:
         for model in ["gemini-2.5-flash", "gemini-2.0-flash"]:
             try:
                 res = gemini_client.models.generate_content(model=model, contents=prompt)
                 if res and res.text:
-                    return res.text.replace("```python", "").replace("```", "").strip()
+                    code = res.text
+                    break
             except Exception:
                 continue
 
-    raise RuntimeError("Inference failed across all providers.")
+    if not code:
+        raise RuntimeError("Failed to generate solution from inference providers.")
 
-# 4. Deterministic Sandbox Verification
-def evaluate_in_sandbox(patch_code: str) -> tuple[bool, str]:
-    test_path = "/tmp/economic_eval.py"
+    return domain, code.replace("```python", "").replace("```", "").strip()
+
+def evaluate_sandbox(code_str: str) -> tuple[bool, str]:
+    test_path = "/tmp/sandbox_eval.py"
     with open(test_path, "w") as f:
-        f.write(patch_code)
+        f.write(code_str)
     try:
-        proc = subprocess.run([sys.executable, test_path], capture_output=True, text=True, timeout=15)
+        proc = subprocess.run([sys.executable, test_path], capture_output=True, text=True, timeout=12)
         passed = (proc.returncode == 0)
-        logs = proc.stdout.strip() if passed else proc.stderr.strip()
+        logs = proc.stdout if passed else proc.stderr
         return passed, logs
     except subprocess.TimeoutExpired:
-        return False, "Sandbox timed out (>15s)."
+        return False, "Timed out (>12s)"
     finally:
         if os.path.exists(test_path):
             os.remove(test_path)
 
-# 5. Zero-Touch PR Creation (Headless)
-def submit_pull_request(repo_full_name: str, issue_number: int, title: str, clean_patch: str):
-    if not GITHUB_TOKEN:
-        print("⚠️ GITHUB_PAT not supplied; skipping remote PR push.")
-        return
-
-    headers = {
-        "Authorization": f"Bearer {GITHUB_TOKEN}",
-        "Accept": "application/vnd.github.v3+json"
-    }
-
-    pr_body = (
-        f"### 🤖 Autonomous Fix for Issue #{issue_number}\n\n"
-        "This patch was generated by an automated reasoning agent and verified against deterministic unit assertions.\n\n"
-        f"```python\n{clean_patch}\n```\n\n"
-        f"---\n"
-        f"**Bounty / Settlement Wallet (USDC/USDT):** `{PAYOUT_WALLET}`\n"
-        f"_Fixes #{issue_number}_"
-    )
-
-    payload = {
-        "title": f"fix: automated resolution for issue #{issue_number}",
-        "body": pr_body,
-        "head": f"kumar-cmd45:patch-issue-{issue_number}",
-        "base": "main"
-    }
-
-    # Open PR directly on the target repository
-    url = f"https://api.github.com/repos/{repo_full_name}/pulls"
-    try:
-        res = requests.post(url, json=payload, headers=headers, timeout=10)
-        if res.status_code == 201:
-            print(f"🎉 Pull Request created successfully: {res.json().get('html_url')}")
-        else:
-            print(f"⚠️ PR creation returned status {res.status_code}: {res.text[:120]}")
-    except Exception as e:
-        print(f"⚠️ PR dispatch exception: {e}")
-
-# 6. Main Economic Loop
-def run_economic_cycle():
+def run_cycle():
     print("=" * 70)
-    print("🚀 EXECUTING ZERO-TOUCH ECONOMIC AGENT")
+    print("🚀 RUNNING AUTONOMOUS REASONING & VAULT INGESTION")
     print("=" * 70)
 
-    issues = fetch_target_bounties()
-    
-    for item in issues:
-        title = item.get("title", "")
-        body = item.get("body", "") or "No body provided."
-        issue_number = item.get("number")
-        repo_url = item.get("repository_url", "")
-        repo_full_name = "/".join(repo_url.split("/")[-2:]) if repo_url else ""
-
-        print(f"\n⚡ Analyzing Target: {repo_full_name} #{issue_number} — {title[:50]}...")
-
+    for attempt in range(1, 4):
+        print(f"\n--- Batch Attempt {attempt}/3 ---")
         try:
-            candidate_patch = generate_candidate_patch(title, body)
-            passed, output = evaluate_in_sandbox(candidate_patch)
+            domain, clean_code = generate_and_solve_challenge()
+            passed, logs = evaluate_sandbox(clean_code)
 
             if passed:
-                print(f"✅ Sandbox validation passed for issue #{issue_number}!")
-                
-                # 1. Push solution trace to Hugging Face Vault
+                print(f"✅ Code verified 100% against all unit assertions!")
                 if hf_api:
-                    fname = f"bounty_{issue_number}_{int(time.time())}.json"
+                    timestamp = int(time.time())
+                    fname = f"trace_{domain}_{timestamp}.json"
                     payload = {
-                        "timestamp": int(time.time()),
-                        "repo": repo_full_name,
-                        "issue_number": issue_number,
-                        "issue_title": title,
+                        "timestamp": timestamp,
+                        "domain": domain,
                         "verified": True,
-                        "patch_code": candidate_patch
+                        "solution_code": clean_code
                     }
                     with open(fname, "w") as f:
                         json.dump(payload, f, indent=2)
+
+                    # Determine repo type (default: model)
                     hf_api.upload_file(
                         path_or_fileobj=fname,
-                        path_in_repo=f"memory_vault/bounties/{fname}",
+                        path_in_repo=f"memory_vault/{domain}/{fname}",
                         repo_id=VAULT_REPO,
                         repo_type="model"
                     )
                     if os.path.exists(fname):
                         os.remove(fname)
-                    print(f"☁️ Synced verified bounty trace to Hugging Face Vault.")
-
-                # 2. Open Pull Request without requiring any manual review
-                submit_pull_request(repo_full_name, issue_number, title, candidate_patch)
-                break  # Complete one verified issue per cycle to stay within API limits
+                    print(f"☁️ Uploaded trajectory to Hugging Face Vault: memory_vault/{domain}/{fname}")
+                break
             else:
-                print(f"❌ Patch failed assertions: {output[:100]}")
-
-        except Exception as err:
-            print(f"⚠️ Notice for issue #{issue_number}: {err}")
+                print(f"❌ Sandbox assertions failed:\n{logs[:180]}")
+        except Exception as e:
+            print(f"⚠️ Cycle error: {e}")
 
     print("\n" + "=" * 70)
-    print("🏁 Economic cycle finished.")
+    print("🏁 Cycle completed.")
     print("=" * 70)
 
 if __name__ == "__main__":
-    run_economic_cycle()
+    run_cycle()
