@@ -1,5 +1,5 @@
 # ==============================================================================
-# KALYAN KISHORE: AUTONOMOUS HEADLESS CLOUD WORKER
+# KALYAN KISHORE: AUTONOMOUS HEADLESS CLOUD WORKER + AUTO-TRAIN TRIGGER
 # ==============================================================================
 import os
 import sys
@@ -12,11 +12,13 @@ from groq import Groq
 from google import genai
 from huggingface_hub import HfApi
 
-# 1. Environment Secrets
+# 1. Environment Secrets & Config
 GROQ_KEY = os.environ.get("GROQ_API_KEY", "").strip()
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 HF_TOKEN = os.environ.get("HF_TOKEN", "").strip()
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+KAGGLE_USER = os.environ.get("KAGGLE_USERNAME", "").strip()
+KAGGLE_KEY = os.environ.get("KAGGLE_KEY", "").strip()
 VAULT_REPO = "Kumar5674/kalyan-kishore-vault"
 
 # Initialize Clients
@@ -36,7 +38,7 @@ def generate_solution(prompt: str) -> tuple[str, str]:
                     temperature=0.2,
                     max_tokens=1500
                 )
-                if res.choices[0].message.content:
+                if res.choices and res.choices[0].message.content:
                     return res.choices[0].message.content, f"Groq/{model}"
             except Exception:
                 continue
@@ -104,7 +106,6 @@ def send_telegram_alert(text: str):
     if not TELEGRAM_TOKEN:
         return
     try:
-        # Fetch latest chat ID from updates if available
         updates_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
         res = requests.get(updates_url, timeout=5).json()
         if res.get("result"):
@@ -114,12 +115,45 @@ def send_telegram_alert(text: str):
     except Exception:
         pass
 
-# 6. Batch Execution Logic
+# 6. Auto-Training Trigger Check
+def check_and_trigger_fine_tuning(threshold=50):
+    if not hf_api or not KAGGLE_USER or not KAGGLE_KEY:
+        return
+
+    try:
+        files = hf_api.list_repo_files(repo_id=VAULT_REPO, repo_type="model")
+        verified_traces = [f for f in files if f.startswith("memory_vault/") and f.endswith(".json")]
+        total_vault_count = len(verified_traces)
+
+        last_trained_count = 0
+        if "training_watermark.json" in files:
+            p = hf_api.hf_hub_download(repo_id=VAULT_REPO, filename="training_watermark.json", repo_type="model")
+            with open(p, "r") as f:
+                mark = json.load(f)
+                last_trained_count = mark.get("total_trained_samples", 0)
+
+        un_trained_count = total_vault_count - last_trained_count
+        print(f"\n📊 Auto-Train Check: {total_vault_count} total traces ({un_trained_count} new, threshold: {threshold})")
+
+        if un_trained_count >= threshold:
+            print(f"🎯 Milestone reached ({un_trained_count} new traces)! Triggering remote Kaggle training...")
+            send_telegram_alert(
+                f"🚀 *Auto-Training Trigger Activated!*\n"
+                f"• Vault Milestones: `{total_vault_count}` verified traces\n"
+                f"• Dispatching Kaggle GPU fine-tuning worker..."
+            )
+            # Push kernel to Kaggle
+            subprocess.run(["kaggle", "kernels", "push", "-p", "."], check=False)
+
+    except Exception as e:
+        print(f"⚠️ Auto-train watcher notice: {e}")
+
+# 7. Batch Execution Logic
 def execute_batch(total_cycles=3):
     print("=" * 70)
     print(f"🚀 INITIATING KALYAN KISHORE AUTONOMOUS BATCH ({total_cycles} CYCLES)")
     print("=" * 70)
-    
+
     successful_runs = 0
 
     for i in range(1, total_cycles + 1):
@@ -137,7 +171,7 @@ def execute_batch(total_cycles=3):
 
             # Auto-Repair on Failure
             if not passed:
-                print(f"⚠️ Initial test failed. Triggering self-repair loop...")
+                print("⚠️ Initial test failed. Triggering self-repair loop...")
                 repair_prompt = f"Fix this Python code that failed with error:\n{output}\n\nCode:\n{clean_code}\nOutput ONLY valid Python."
                 repair_code, _ = generate_solution(repair_prompt)
                 clean_code = repair_code.replace("```python", "").replace("```", "").strip()
@@ -151,7 +185,7 @@ def execute_batch(total_cycles=3):
 
                 # Push to Hugging Face Vault
                 if hf_api:
-                    fname = f"github_action_{domain_key}_{int(time.time())}.json"
+                    fname = f"action_{domain_key}_{int(time.time())}.json"
                     payload = {
                         "timestamp": int(time.time()),
                         "domain": domain_key,
@@ -178,7 +212,7 @@ def execute_batch(total_cycles=3):
                 print(f"❌ Failed after {attempts} attempts. Skipped vault upload.")
 
         except Exception as e:
-            print(f"⚠️ Batch Notice: {e}")
+            print(f"⚠️ Batch Cycle Notice: {e}")
 
         time.sleep(5)
 
@@ -186,7 +220,11 @@ def execute_batch(total_cycles=3):
     summary_msg = f"📊 *GitHub Cloud Worker Summary*\n• Verified Runs: `{successful_runs}/{total_cycles}`\n• Vault: `{VAULT_REPO}`"
     print(summary_msg.replace("*", "").replace("`", ""))
     print("=" * 70)
+    
     send_telegram_alert(summary_msg)
+    
+    # Check if threshold reached to trigger model fine-tuning
+    check_and_trigger_fine_tuning(threshold=50)
 
 if __name__ == "__main__":
     execute_batch(total_cycles=3)
