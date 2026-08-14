@@ -2,9 +2,8 @@ name: 24/7 Autonomous Self-Training Loop
 
 on:
   schedule:
-    # Runs automatically every 30 minutes forever
     - cron: '*/30 * * * *'
-  workflow_dispatch: # Allows manual trigger anytime from GitHub UI
+  workflow_dispatch:
 
 jobs:
   run-rlvr-daemon:
@@ -20,12 +19,15 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install groq google-genai huggingface_hub numpy scipy
+          pip install groq google-genai huggingface_hub numpy scipy requests kaggle
 
-      - name: Execute Autonomous RLVR Cycle
+      - name: Execute RLVR Cycle & Check Auto-Train Trigger
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
         run: |
           python worker.py
