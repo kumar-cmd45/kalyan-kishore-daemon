@@ -1,0 +1,7 @@
+pyTelegramBotAPI
+groq
+google-genai
+huggingface_hub
+requests
+flask
+gunicorn
