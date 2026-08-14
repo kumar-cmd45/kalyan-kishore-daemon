@@ -1,4 +1,4 @@
-name: 24/7 Autonomous Self-Training Loop
+name: 24/7 Autonomous Self-Training & Economic Loop
 
 on:
   schedule:
@@ -24,13 +24,16 @@ jobs:
         run: |
           pip install --upgrade groq google-genai huggingface_hub numpy scipy requests kaggle
 
-      - name: Execute RLVR Cycle & Check Auto-Train Trigger
+      - name: Execute RLVR & Economic Bounty Cycles
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          GITHUB_PAT: ${{ secrets.GITHUB_PAT }}
+          PAYOUT_WALLET: ${{ secrets.PAYOUT_WALLET }}
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
           KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
         run: |
           python worker.py
+          python economic_agent.py
