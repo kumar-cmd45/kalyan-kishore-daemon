@@ -5,6 +5,9 @@ on:
     - cron: '*/30 * * * *'
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   run-rlvr-daemon:
     runs-on: ubuntu-latest
@@ -19,7 +22,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install groq google-genai huggingface_hub numpy scipy requests kaggle
+          pip install --upgrade groq google-genai huggingface_hub numpy scipy requests kaggle
 
       - name: Execute RLVR Cycle & Check Auto-Train Trigger
         env:
