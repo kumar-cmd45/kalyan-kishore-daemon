@@ -20,37 +20,39 @@ def dispatch_telegram(task: dict, solution: str, consensus_badge: str):
     if not TELEGRAM_TOKEN:
         return
     try:
-        # Use explicit Chat ID if set, fallback to dynamic polling
         chat_id = TELEGRAM_CHAT_ID
         if not chat_id:
-            u_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
-            res = requests.get(u_url, timeout=5).json()
-            if res.get("result"):
-                chat_id = res["result"][-1]["message"]["chat"]["id"]
-
-        if not chat_id:
-            print("⚠️ Notice: Could not resolve TELEGRAM_CHAT_ID.")
             return
 
-        wallet_txt = f"🦊 `{PAYOUT_WALLET[:6]}...{PAYOUT_WALLET[-4:]}`" if PAYOUT_WALLET else "Stripe / Standard"
+        import html
+        clean_solution = html.escape(solution[:1400])
+        clean_title = html.escape(task.get('title', '')[:70])
+        clean_platform = html.escape(task.get('platform', ''))
+        clean_reward = html.escape(task.get('reward', ''))
+        task_url = task.get('url', '')
 
         msg = (
-            f"💰 *New Verified Bounty Ready to Claim!*\n\n"
-            f"• *Platform:* `{task['platform']}`\n"
-            f"• *Reward:* `{task['reward']}`\n"
-            f"• *Payout Type:* `{task['payout_type']}` ({wallet_txt})\n"
-            f"• *Verification:* `{consensus_badge}`\n"
-            f"• *Task Title:* [{task['title'][:65]}]({task['url']})\n\n"
-            f"📝 *Pre-Verified Solution (Ready to Paste):*\n"
-            f"```\n{solution[:1100]}\n```\n\n"
-            f"👉 [Tap to Open Task & Submit Solution]({task['url']})"
+            f"💰 <b>New Verified Bounty Ready to Claim!</b>\n\n"
+            f"• <b>Platform:</b> {clean_platform}\n"
+            f"• <b>Reward:</b> {clean_reward}\n"
+            f"• <b>Verification:</b> {consensus_badge}\n"
+            f"• <b>Task:</b> <a href='{task_url}'>{clean_title}</a>\n\n"
+            f"📝 <b>Pre-Verified Solution (Ready to Paste):</b>\n"
+            f"<pre>{clean_solution}</pre>\n\n"
+            f"👉 <a href='{task_url}'>Tap here to open task & submit</a>"
         )
 
         send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        requests.post(send_url, json={"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"}, timeout=8)
-        print(f"📱 1-Tap Bounty solution dispatched directly to Telegram chat {chat_id}!")
+        requests.post(send_url, json={
+            "chat_id": chat_id,
+            "text": msg,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True
+        }, timeout=10)
+        print(f"📱 Dispatched HTML-safe alert to Telegram chat {chat_id}!")
     except Exception as e:
         print(f"⚠️ Telegram dispatch error: {e}")
+
 
 
 # ==============================================================================
