@@ -1,19 +1,19 @@
-name: Hourly Self-Training & Bounty Pipeline
+name: Hourly Self-Training & Knowledge Pipeline
 
 on:
   schedule:
-    - cron: '0 * * * *'  # Runs automatically at the start of every hour (24 times/day)
-  workflow_dispatch:      # Allows manual one-click trigger anytime
+    - cron: '0 * * * *'
+  workflow_dispatch:
 
 jobs:
-  hourly-batch-runner:
+  hourly-pipeline:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.11
+      - name: Setup Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -26,6 +26,7 @@ jobs:
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           python worker.py
@@ -38,3 +39,7 @@ jobs:
           GITHUB_PAT: ${{ secrets.GITHUB_PAT }}
         run: |
           python economic_agent.py
+
+      - name: Build Programmatic Documentation
+        run: |
+          python generate_docs.py
