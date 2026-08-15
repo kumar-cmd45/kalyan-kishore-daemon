@@ -1,11 +1,12 @@
 import os
 import json
+import html
 import requests
 import telebot
 from flask import Flask
 import threading
 
-# Configuration
+# 1. Environment Secrets
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 HF_TOKEN = os.environ.get("HF_TOKEN", "").strip()
 VAULT_REPO = "Kumar5674/kalyan-kishore-vault"
@@ -17,16 +18,18 @@ app = Flask(__name__)
 def home():
     return "Kalyan Kishore Master Daemon is Live!"
 
+def get_auth_headers():
+    return {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
+
 def get_vault_files():
     """Fetches list of all files inside memory_vault/."""
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
     url = f"https://huggingface.co/api/models/{VAULT_REPO}/tree/main/memory_vault?recursive=true"
     try:
-        res = requests.get(url, headers=headers, timeout=8)
+        res = requests.get(url, headers=get_auth_headers(), timeout=10)
         if res.status_code == 200:
             return [f["path"] for f in res.json()]
     except Exception as e:
-        print(f"Vault fetch notice: {e}")
+        print(f"⚠️ Vault fetch notice: {e}")
     return []
 
 @bot.message_handler(commands=['start', 'help'])
@@ -36,8 +39,8 @@ def send_welcome(message):
         "👋 <b>Kalyan Kishore Master Daemon</b>\n\n"
         "Commands:\n"
         "• <code>/status</code> - View live telemetry & counts\n"
-        "• <code>/bounties</code> - Get latest verified bounty code & submission URL\n"
-        "• <code>/vault</code> - Hugging Face storage direct link",
+        "• <code>/bounties</code> - Get latest verified bounty code & submission link\n"
+        "• <code>/vault</code> - Hugging Face storage link",
         parse_mode="HTML"
     )
 
@@ -71,28 +74,33 @@ def send_bounties(message):
         bot.reply_to(message, "📭 No verified bounty solutions found in vault yet.")
         return
 
-    # 1. Fetch latest bounty JSON
+    # Use the latest bounty file
     latest_file = bounty_files[-1]
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
-    raw_url = f"https://huggingface.co/{VAULT_REPO}/raw/main/{latest_file}"
+    
+    # Direct CDN resolve endpoint (follows redirects automatically)
+    resolve_url = f"https://huggingface.co/{VAULT_REPO}/resolve/main/{latest_file}"
     
     try:
-        res = requests.get(raw_url, headers=headers, timeout=10)
+        res = requests.get(resolve_url, headers=get_auth_headers(), timeout=12, allow_redirects=True)
+        if res.status_code != 200:
+            bot.reply_to(message, f"⚠️ Hugging Face returned HTTP {res.status_code}: {res.text[:200]}")
+            return
+
         data = res.json()
 
-        # 2. Universal Extractor (handles nested task vs flat keys)
+        # Handle nested task dictionary vs flat dictionary
         task_data = data.get("task", {}) if isinstance(data.get("task"), dict) else data
 
         title = task_data.get("title") or data.get("title") or "Open Source Bounty"
         platform = task_data.get("platform") or data.get("platform") or "Bounty Platform"
-        reward = task_data.get("reward") or data.get("reward") or "See Issue / Portal"
-        payout_type = task_data.get("payout_type") or data.get("payout_type") or "Crypto / Cash"
+        reward = task_data.get("reward") or data.get("reward") or "Portal Stated Reward"
+        payout_type = task_data.get("payout_type") or data.get("payout_type") or "Crypto / Stripe"
         url = task_data.get("url") or data.get("url") or "https://github.com"
-        solution = data.get("solution") or task_data.get("solution") or "Fix generated and verified."
+        solution = data.get("solution") or task_data.get("solution") or "Fix verified and stored."
         badge = data.get("badge") or "Triple Consensus Verified"
 
         clean_solution = html.escape(str(solution)[:1400])
-        clean_title = html.escape(str(title)[:75])
+        clean_title = html.escape(str(title)[:80])
         clean_platform = html.escape(str(platform))
         clean_reward = html.escape(str(reward))
 
@@ -107,5 +115,11 @@ def send_bounties(message):
             f"👉 <a href='{url}'><b>[Click Here to Open Task & Submit]</b></a>"
         )
         bot.send_message(message.chat.id, msg, parse_mode="HTML", disable_web_page_preview=True)
+    except Exception as e:
+        bot.reply_to(message, f"⚠️ Error downloading bounty payload: {str(e)}")
+
+if __name__ == "__main__":
+    threading.Thread(target=lambda: bot.infinity_polling(timeout=20, long_polling_timeout=10), daemon=True).start()
+    app.run(host="0.0.0.0", port=10000)
     except Exception as e:
         bot.reply_to(message, f"⚠️ Error parsing vault bounty: {str(e)}")
