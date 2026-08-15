@@ -8,6 +8,7 @@ from groq import Groq
 from google import genai
 from huggingface_hub import HfApi
 
+# 1. Environment Secrets & Config
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 GROQ_KEY = os.environ.get("GROQ_API_KEY", "").strip()
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
@@ -25,49 +26,65 @@ app = Flask(__name__)
 def health():
     return "🚀 Kalyan Kishore Bot is Online & Awake 24/7!", 200
 
-def get_live_system_context() -> str:
-    """Reads live vault data and telemetry ledger from Hugging Face."""
+# 2. Live Vault & Telemetry Reader
+def get_live_system_context() -> tuple[dict, str]:
     if not hf_api:
-        return "No telemetry connection available."
+        return {}, "Hugging Face API uninitialized (missing HF_TOKEN)."
+    
+    repo_type = "model"
+    files = []
     try:
         files = hf_api.list_repo_files(repo_id=VAULT_REPO, repo_type="model")
-        traces = [f for f in files if f.startswith("memory_vault/") and f.endswith(".json")]
-        
-        ledger_info = "No bounty runs logged yet."
-        if "telemetry/bounty_ledger.json" in files:
-            p = hf_api.hf_hub_download(repo_id=VAULT_REPO, filename="telemetry/bounty_ledger.json", repo_type="model")
-            with open(p, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                recent = "\n".join([f"- [{log['status']}] {log['repo']} #{log['issue_number']}: {log['title']}" for log in data.get("recent_logs", [])[:5]])
-                ledger_info = (
-                    f"Total Attempts: {data.get('total_attempts', 0)}\n"
-                    f"Total Verified: {data.get('total_passed', 0)}\n"
-                    f"Recent Targets:\n{recent}"
-                )
+    except Exception:
+        try:
+            files = hf_api.list_repo_files(repo_id=VAULT_REPO, repo_type="dataset")
+            repo_type = "dataset"
+        except Exception as e:
+            return {}, f"Vault connection notice: {e}"
 
-        return (
-            f"=== LIVE AGENT TELEMETRY & STATE ===\n"
-            f"Vault Repo: {VAULT_REPO}\n"
-            f"Total Verified Trajectories: {len(traces)}\n"
-            f"Bounty Operations:\n{ledger_info}\n"
-            f"====================================="
-        )
-    except Exception as e:
-        return f"Telemetry read error: {e}"
+    traces = [f for f in files if f.startswith("memory_vault/") and f.endswith(".json")]
+    quant_traces = [f for f in traces if "quant_finance" in f]
+    algo_traces = [f for f in traces if "algo_systems" in f]
+    cyber_traces = [f for f in traces if "cyber_security" in f]
+    bounty_traces = [f for f in traces if "bount" in f]
 
-def ask_ai_with_context(user_query: str) -> str:
-    telemetry = get_live_system_context()
-    
+    stats = {
+        "total_trajectories": len(traces),
+        "quant_count": len(quant_traces),
+        "algo_count": len(algo_traces),
+        "cyber_count": len(cyber_traces),
+        "bounty_count": len(bounty_traces),
+        "repo_type": repo_type,
+        "latest_file": sorted(traces)[-1] if traces else "None"
+    }
+
+    summary = (
+        f"=== LIVE SYSTEM TELEMETRY ===\n"
+        f"• Vault Repository: {VAULT_REPO} ({repo_type})\n"
+        f"• Total Verified Trajectories: {len(traces)}\n"
+        f"  - Quantitative Finance: {len(quant_traces)}\n"
+        f"  - Algorithmic Systems: {len(algo_traces)}\n"
+        f"  - Cyber Security AST: {len(cyber_traces)}\n"
+        f"  - Verified Bounties: {len(bounty_traces)}\n"
+        f"• Latest Stored Trace: {stats['latest_file']}\n"
+        f"• Background Worker: GitHub Actions (24/7 cron)\n"
+        f"=============================="
+    )
+    return stats, summary
+
+# 3. Context-Aware AI Chat Waterfall
+def ask_ai_with_telemetry(user_query: str) -> str:
+    _, telemetry = get_live_system_context()
+
     system_prompt = (
-        "You are Kalyan Kishore, an autonomous reasoning AI agent with active background workflows.\n"
-        "You run continuous RLVR loops, deterministic sandbox tests, and GitHub bounty scanners.\n\n"
+        "You are Kalyan Kishore (Isikai), an autonomous RLVR reasoning agent.\n"
+        "You run autonomous background cycles solving complex code challenges, validating them in deterministic sandboxes, and syncing them to your Hugging Face vault.\n\n"
         f"{telemetry}\n\n"
-        "INSTRUCTIONS:\n"
-        "- When asked about bounties, trajectories, background tasks, or self-training, reference the exact live metrics above.\n"
-        "- Be precise, candid, and direct about real numbers. If an attempt failed unit tests, state that accurately."
+        "STRICT INSTRUCTIONS:\n"
+        "- When the user asks about trajectories, background work, bounties, self-training, or status, always use the real metrics above.\n"
+        "- Be concise, direct, and factual."
     )
 
-    # Groq Waterfall
     if groq_client:
         for model in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
             try:
@@ -78,51 +95,76 @@ def ask_ai_with_context(user_query: str) -> str:
                         {"role": "user", "content": user_query}
                     ],
                     temperature=0.3,
-                    max_tokens=1200
+                    max_tokens=1000
                 )
                 if res.choices and res.choices[0].message.content:
                     return res.choices[0].message.content
             except Exception:
                 continue
 
-    # Gemini Fallback
     if gemini_client:
         for model in ["gemini-2.5-flash", "gemini-2.0-flash"]:
             try:
-                full_prompt = f"{system_prompt}\n\nUser Question: {user_query}"
+                full_prompt = f"{system_prompt}\n\nUser: {user_query}"
                 res = gemini_client.models.generate_content(model=model, contents=full_prompt)
                 if res and res.text:
                     return res.text
             except Exception:
                 continue
 
-    return "⚠️ System notice: Upstream inference endpoints are busy. Please try again shortly."
+    return "⚠️ System notice: Inference endpoints are busy. Please try again shortly."
 
-@bot.message_handler(commands=['bounties'])
-def show_bounties(message):
-    bot.send_chat_action(message.chat.id, 'typing')
-    context = get_live_system_context()
-    bot.reply_to(message, f"```\n{context}\n```", parse_mode="Markdown")
+# 4. Telegram Command Handlers
+@bot.message_handler(commands=['start', 'help'])
+def send_welcome(message):
+    help_text = (
+        "🤖 *Kalyan Kishore 24/7 Autonomous Agent*\n\n"
+        "• `/status` — View real-time Vault & system stats\n"
+        "• `/vault` — Inspect stored trajectories & categories\n"
+        "• Ask me anything about what I'm executing in the background!"
+    )
+    bot.reply_to(message, help_text, parse_mode="Markdown")
 
 @bot.message_handler(commands=['status'])
 def show_status(message):
     bot.send_chat_action(message.chat.id, 'typing')
-    context = get_live_system_context()
-    bot.reply_to(message, f"```\n{context}\n```", parse_mode="Markdown")
+    _, summary = get_live_system_context()
+    bot.reply_to(message, f"```\n{summary}\n```", parse_mode="Markdown")
+
+@bot.message_handler(commands=['vault'])
+def show_vault(message):
+    bot.send_chat_action(message.chat.id, 'typing')
+    stats, _ = get_live_system_context()
+    if not stats or stats.get("total_trajectories", 0) == 0:
+        bot.reply_to(message, "📭 Vault is currently empty or indexing.")
+        return
+
+    text = (
+        "🏛️ *Hugging Face Memory Vault*\n\n"
+        f"• *Total Verified Trajectories:* `{stats['total_trajectories']}`\n"
+        f"• *Quant Finance:* `{stats['quant_count']}`\n"
+        f"• *Algo Systems:* `{stats['algo_count']}`\n"
+        f"• *Cyber AST:* `{stats['cyber_count']}`\n"
+        f"• *Bounty Patches:* `{stats['bounty_count']}`\n\n"
+        f"• *Latest Entry:* `{stats['latest_file']}`\n\n"
+        f"👉 [Open Hugging Face Vault](https://huggingface.co/{VAULT_REPO}/tree/main/memory_vault)"
+    )
+    bot.reply_to(message, text, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda msg: True)
 def handle_chat(message):
     bot.send_chat_action(message.chat.id, 'typing')
-    reply = ask_ai_with_context(message.text)
+    reply = ask_ai_with_telemetry(message.text)
     bot.reply_to(message, reply)
 
+# 5. Execution Entry Point
 def start_bot():
     print("🚀 Telegram polling loop initialized.")
     while True:
         try:
             bot.infinity_polling(timeout=20, long_polling_timeout=10)
         except Exception as e:
-            print(f"⚠️ Polling reconnecting: {e}")
+            print(f"⚠️ Polling notice: {e}")
             time.sleep(3)
 
 if __name__ == "__main__":
@@ -130,24 +172,4 @@ if __name__ == "__main__":
     t.start()
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
-    reply = ask_ai(message.text)
-    bot.reply_to(message, reply)
-
-# Resilient Polling Worker
-def start_bot():
-    print("🚀 Telegram polling loop initialized.")
-    while True:
-        try:
-            bot.infinity_polling(timeout=20, long_polling_timeout=10)
-        except Exception as e:
-            print(f"⚠️ Polling reconnecting: {e}")
-            time.sleep(3)
-
-if __name__ == "__main__":
-    # Start bot listener in background thread
-    t = threading.Thread(target=start_bot, daemon=True)
-    t.start()
     
-    # Run web server for keepalive pings on port assigned by Render
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
