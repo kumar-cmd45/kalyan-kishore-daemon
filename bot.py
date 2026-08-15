@@ -162,3 +162,22 @@ def health():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+@bot.message_handler(commands=['bounties'])
+def show_all_bounties(message):
+    files = api.list_repo_files(repo_id="Kumar5674/kalyan-kishore-vault", repo_type="model")
+    b_files = [f for f in files if f.startswith("memory_vault/bounties/")][-5:]
+    
+    if not b_files:
+        bot.reply_to(message, "⚠️ No bounties in vault.")
+        return
+
+    text = "🎯 *Vaulted Bounties:*\n\n"
+    for idx, bf in enumerate(b_files, 1):
+        p = hf_hub_download(repo_id="Kumar5674/kalyan-kishore-vault", filename=bf, repo_type="model")
+        with open(p, "r") as f:
+            d = json.load(f)
+            b = d.get("bounty", {})
+            text += f"{idx}. *${b.get('reward', 0)}* — [{b.get('title')}]({b.get('url')})\n\n"
+    
+    bot.send_message(message.chat.id, text, parse_mode="Markdown", disable_web_page_preview=True)
+    
