@@ -1,0 +1,14 @@
+{
+  "id": "kumar5782/kalyan-kishore-daemon",
+  "title": "kalyan-kishore-daemon",
+  "code_file": "kaggle_runner.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "false",
+  "enable_tpu": "false",
+  "enable_internet": "true",
+  "dataset_sources": [],
+  "competition_sources": [],
+  "kernel_sources": []
+}
