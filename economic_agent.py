@@ -205,3 +205,18 @@ def run_omni_engine():
 if __name__ == "__main__":
     run_omni_engine()
     
+# Add this filter inside economic_agent.py before passing text to LLM
+SUSPICIOUS_PHRASES = [
+    "Instructions for AI agents",
+    "star the repository",
+    "/user/starred",
+    "create another issue with the same contents"
+]
+
+def is_legitimate_bounty(issue_body: str) -> bool:
+    for phrase in SUSPICIOUS_PHRASES:
+        if phrase.lower() in issue_body.lower():
+            print("🚨 Alert: Blocked a prompt injection / star-farming fake bounty.")
+            return False
+    return True
+    
