@@ -6,12 +6,12 @@ import requests
 from huggingface_hub import HfApi, hf_hub_download
 
 # ==============================================================================
-# CONFIGURATION
+# CONFIGURATION & CLIENT INITIALIZATION
 # ==============================================================================
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-HF_TOKEN = os.environ.get("HF_TOKEN", "")
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-VAULT_REPO = os.environ.get("VAULT_REPO", "Kumar5674/kalyan-kishore-vault")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+HF_TOKEN = os.environ.get("HF_TOKEN", "").strip()
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
+VAULT_REPO = os.environ.get("VAULT_REPO", "Kumar5674/kalyan-kishore-vault").strip()
 
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN, parse_mode="Markdown")
 hf_api = HfApi(token=HF_TOKEN if HF_TOKEN else None)
@@ -23,6 +23,9 @@ SUSPICIOUS_PHRASES = [
     "create another issue with the same contents"
 ]
 
+# ==============================================================================
+# VAULT HELPERS & PARSERS
+# ==============================================================================
 def get_vault_files():
     try:
         return hf_api.list_repo_files(repo_id=VAULT_REPO, repo_type="model")
@@ -41,36 +44,28 @@ def load_json_file(file_path: str) -> dict:
         return json.load(f)
 
 def parse_bounty_payload(data: dict) -> dict:
-    """Universal parser searching across flat and nested dictionary structures."""
-    # Check if nested under 'task' or 'bounty'
+    """Universal parser supporting both flat schemas and nested dictionary hierarchies."""
     nested = {}
     if isinstance(data.get("task"), dict):
         nested = data.get("task")
     elif isinstance(data.get("bounty"), dict):
         nested = data.get("bounty")
 
-    # 1. Title
-    title = (
-        data.get("title") or nested.get("title")
-        or (data.get("task") if isinstance(data.get("task"), str) else None)
-        or "Bounty Task"
-    )
+    # 1. Clean Title Extraction
+    raw_title = data.get("title") or nested.get("title")
+    if not raw_title and isinstance(data.get("task"), str):
+        raw_title = data.get("task")
+    title = str(raw_title or "Bounty Task").strip()
 
-    # 2. Reward
-    reward = (
-        data.get("reward") or nested.get("reward")
-        or data.get("bounty_amount") or data.get("payout")
-        or "Escrow / Unlisted"
-    )
+    # 2. Clean Reward Extraction
+    raw_reward = data.get("reward") or nested.get("reward") or data.get("bounty_amount") or data.get("payout")
+    reward = str(raw_reward or "Escrow / Unlisted").replace("$", "").strip()
 
-    # 3. URL
-    url = (
-        data.get("url") or nested.get("url")
-        or data.get("issue_url") or data.get("html_url")
-        or "https://github.com"
-    )
+    # 3. Clean URL Extraction
+    raw_url = data.get("url") or nested.get("url") or data.get("issue_url") or data.get("html_url")
+    url = str(raw_url or "https://github.com").strip()
 
-    # 4. Patch / Solution
+    # 4. Solution Code / Patch Extraction
     patch = (
         data.get("solution_patch") or data.get("solution")
         or nested.get("solution_patch") or nested.get("solution")
@@ -79,48 +74,49 @@ def parse_bounty_payload(data: dict) -> dict:
     )
 
     return {
-        "title": str(title)[:120],
-        "reward": str(reward).replace("$", ""),
-        "url": str(url),
-        "patch": str(patch)
+        "title": title[:100],
+        "reward": reward,
+        "url": url,
+        "patch": str(patch).strip()
     }
 
 def ask_groq_llm(prompt: str) -> str:
-    """Answers general questions via Groq."""
+    """Conversational fallback for non-command inquiries."""
     if not GROQ_API_KEY:
-        return "⚠️ Set `GROQ_API_KEY` in environment variables to enable general conversational AI."
+        return "⚠️ Groq API key unset. Configure `GROQ_API_KEY` in environment variables for conversational responses."
     try:
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
         payload = {
             "model": "llama-3.3-70b-versatile",
             "messages": [
-                {"role": "system", "content": "You are Kalyan Kishore Master, a quantitative finance and systems automation AI assistant."},
+                {"role": "system", "content": "You are Kalyan Kishore Master, a senior quantitative finance, cyber security, and autonomous systems engineer."},
                 {"role": "user", "content": prompt}
             ],
             "max_tokens": 800,
-            "temperature": 0.5
+            "temperature": 0.4
         }
-        res = requests.post(url, headers=headers, json=payload, timeout=20)
+        res = requests.post(url, headers=headers, json=payload, timeout=25)
         if res.status_code == 200:
             return res.json()["choices"][0]["message"]["content"]
-        return f"⚠️ LLM Response Error (HTTP {res.status_code})"
+        return f"⚠️ API Gateway error: HTTP {res.status_code}"
     except Exception as e:
-        return f"⚠️ Connection error: {str(e)}"
+        return f"⚠️ LLM routing notice: {str(e)}"
 
 # ==============================================================================
-# BOT COMMANDS
+# TELEGRAM BOT COMMAND ROUTING
 # ==============================================================================
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     text = (
-        "🤖 *Kalyan Kishore Master AI Online*\n\n"
-        "*Commands:*\n"
-        "• `/status` — View telemetry & trajectory counts\n"
-        "• `/bounties` — List all verified bounties\n"
-        "• `/bounty <num>` — View solution code for bounty\n"
-        "• `/raw_bounty <num>` — View raw JSON debug dump\n\n"
-        "💬 *General Questions:* Send any question directly to chat."
+        "🤖 *Kalyan Kishore Master Daemon Telemetry*\n\n"
+        "*Core Operations:*\n"
+        "• `/status` — Real-time telemetry & category metrics\n"
+        "• `/bounties` — Display all verified monetary tasks\n"
+        "• `/bounty <id>` — View unified git patch solution\n"
+        "• `/cleanup` — Auto-delete duplicate tasks & spam honeypots from HF\n"
+        "• `/raw_bounty <id>` — Debug raw JSON schema in vault\n\n"
+        "💬 *Chat:* Send any programming or mathematical question directly."
     )
     bot.reply_to(message, text)
 
@@ -145,55 +141,55 @@ def send_status(message):
         telemetry = (
             "```\n"
             "=== LIVE SYSTEM TELEMETRY ===\n"
-            f"• Vault: {VAULT_REPO}\n"
-            f"• Total Trajectories: {total}\n"
+            f"• Vault Target: {VAULT_REPO}\n"
+            f"• Total Verified Trajectories: {total}\n"
             f"  - Quantitative Finance: {quant}\n"
             f"  - Algorithmic Systems: {algo}\n"
             f"  - Cyber Security AST: {ast}\n"
             f"  - Verified Bounties: {len(bounty_files)}\n"
-            "• Worker: GitHub Actions (24/7 cron)\n"
+            "• Worker Pipeline: GitHub Actions (24/7 cron)\n"
             "==============================\n"
             "```"
         )
         bot.send_message(message.chat.id, telemetry)
     except Exception as e:
-        bot.reply_to(message, f"❌ Status error: {str(e)}")
+        bot.reply_to(message, f"❌ Status calculation error: {str(e)}")
 
 @bot.message_handler(commands=['bounties'])
-def list_bounties(message):
+def list_all_bounties(message):
     try:
         files = get_vault_files()
         b_files = sorted([f for f in files if f.startswith("memory_vault/bounties/") and f.endswith(".json")])
 
         if not b_files:
-            bot.reply_to(message, "⚠️ No bounty files found in `memory_vault/bounties/`.")
+            bot.reply_to(message, "⚠️ No bounty records currently indexed in vault.")
             return
 
-        bot.send_message(message.chat.id, f"🎯 *Found {len(b_files)} Bounties:*")
+        bot.send_message(message.chat.id, f"🎯 *Found {len(b_files)} Bounties in Vault:*")
         for idx, fpath in enumerate(b_files, start=1):
             data = load_json_file(fpath)
             item = parse_bounty_payload(data)
-            
+
             is_spam = any(phrase in json.dumps(data).lower() for phrase in SUSPICIOUS_PHRASES)
             warning = " ⚠️ *(Suspected Star-Farm)*" if is_spam else ""
 
             card = (
                 f"*{idx}. {item['title']}*{warning}\n"
                 f"💰 *Reward:* ${item['reward']} USD\n"
-                f"🔗 [Open Link]({item['url']})\n"
+                f"🔗 [Open GitHub Issue]({item['url']})\n"
                 f"👉 View patch: `/bounty {idx}`"
             )
             bot.send_message(message.chat.id, card, disable_web_page_preview=True)
             time.sleep(0.2)
     except Exception as e:
-        bot.reply_to(message, f"❌ Retrieval error: {str(e)}")
+        bot.reply_to(message, f"❌ Bounties retrieval error: {str(e)}")
 
 @bot.message_handler(commands=['bounty'])
 def view_bounty(message):
     try:
         args = message.text.split()
         if len(args) < 2 or not args[1].isdigit():
-            bot.reply_to(message, "⚠️ Specify a number: `/bounty 1`")
+            bot.reply_to(message, "⚠️ Specify a task number. Example: `/bounty 1`")
             return
 
         idx = int(args[1]) - 1
@@ -201,21 +197,64 @@ def view_bounty(message):
         b_files = sorted([f for f in files if f.startswith("memory_vault/bounties/") and f.endswith(".json")])
 
         if idx < 0 or idx >= len(b_files):
-            bot.reply_to(message, f"❌ Invalid index. Max available: {len(b_files)}")
+            bot.reply_to(message, f"❌ Out of range. Available bounds: 1 to {len(b_files)}")
             return
 
         data = load_json_file(b_files[idx])
         item = parse_bounty_payload(data)
-        
-        header = f"🎯 *Bounty #{idx+1} Solution*\n• *Task:* {item['title']}\n• *Reward:* ${item['reward']}\n• *URL:* {item['url']}\n\n📝 *Patch:*"
+
+        header = (
+            f"🎯 *Bounty #{idx+1} Solution Card*\n"
+            f"• *Task:* {item['title']}\n"
+            f"• *Reward:* ${item['reward']} USD\n"
+            f"• *URL:* {item['url']}\n\n"
+            f"📝 *Generated Pull Request Diff:*"
+        )
         bot.send_message(message.chat.id, header, disable_web_page_preview=True)
 
         patch = item["patch"]
         if len(patch) > 3500:
-            patch = patch[:3500] + "\n\n...[Truncated]"
+            patch = patch[:3500] + "\n\n... [Truncated for Telegram payload limits]"
+
         bot.send_message(message.chat.id, f"```diff\n{patch}\n```")
     except Exception as e:
-        bot.reply_to(message, f"❌ Error: {str(e)}")
+        bot.reply_to(message, f"❌ Bounty view error: {str(e)}")
+
+@bot.message_handler(commands=['cleanup'])
+def cleanup_vault(message):
+    """Deletes all duplicate issue URLs and spam honeypots directly from Hugging Face."""
+    bot.reply_to(message, "🧹 Scanning Hugging Face Vault for duplicates and spam...")
+    try:
+        files = get_vault_files()
+        b_files = sorted([f for f in files if f.startswith("memory_vault/bounties/") and f.endswith(".json")])
+
+        seen_urls = set()
+        deleted_count = 0
+
+        for fpath in b_files:
+            data = load_json_file(fpath)
+            item = parse_bounty_payload(data)
+            url_key = item["url"].strip().lower()
+
+            is_spam = any(phrase in json.dumps(data).lower() for phrase in SUSPICIOUS_PHRASES)
+            is_duplicate = url_key in seen_urls and url_key not in ["", "https://github.com"]
+
+            if is_spam or is_duplicate:
+                hf_api.delete_file(
+                    path_in_repo=fpath,
+                    repo_id=VAULT_REPO,
+                    repo_type="model"
+                )
+                deleted_count += 1
+            else:
+                seen_urls.add(url_key)
+
+        bot.send_message(
+            message.chat.id,
+            f"✅ *Vault Cleaned Successfully!*\n• Deleted `{deleted_count}` duplicate/spam records.\n• Unique tasks retained."
+        )
+    except Exception as e:
+        bot.reply_to(message, f"❌ Vault cleanup notice: {str(e)}")
 
 @bot.message_handler(commands=['raw_bounty'])
 def debug_raw_bounty(message):
@@ -224,16 +263,16 @@ def debug_raw_bounty(message):
         idx = int(args[1]) - 1 if len(args) > 1 and args[1].isdigit() else 0
         files = get_vault_files()
         b_files = sorted([f for f in files if f.startswith("memory_vault/bounties/") and f.endswith(".json")])
-        
+
         if not b_files:
-            bot.reply_to(message, "No bounties in vault.")
+            bot.reply_to(message, "⚠️ No records in vault.")
             return
 
         data = load_json_file(b_files[idx])
         raw_str = json.dumps(data, indent=2)[:3500]
         bot.send_message(message.chat.id, f"```json\n{raw_str}\n```")
     except Exception as e:
-        bot.reply_to(message, f"Debug error: {str(e)}")
+        bot.reply_to(message, f"❌ Debug dump notice: {str(e)}")
 
 @bot.message_handler(func=lambda msg: True, content_types=['text'])
 def handle_general_chat(message):
@@ -242,6 +281,6 @@ def handle_general_chat(message):
     bot.reply_to(message, response)
 
 if __name__ == "__main__":
-    print("🚀 Bot initialized with conversational LLM & universal vault parser...")
+    print("🚀 Kalyan Kishore Master Daemon online...")
     bot.infinity_polling(timeout=20, long_polling_timeout=10)
-    
+                
