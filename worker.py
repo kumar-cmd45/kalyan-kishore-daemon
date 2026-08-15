@@ -1,200 +1,392 @@
 # ==============================================================================
-# KALYAN KISHORE: AUTONOMOUS HEADLESS CLOUD WORKER (HIGH-YIELD RLVR)
+# KALYAN KISHORE - HIGH-YIELD RLVR WORKER DAEMON (worker.py)
+# Domains: Quantitative Finance & Greeks, Algorithmic Systems, Cybersecurity AST
+# Architecture: Task Generation -> Inference -> Sandbox Eval -> Self-Repair -> HF Vault Upload
 # ==============================================================================
 import os
-import re
 import sys
-import json
 import time
+import json
 import random
 import subprocess
 import requests
-from groq import Groq
-from google import genai
 from huggingface_hub import HfApi
 
-# 1. Environment Secrets & Config
-GROQ_KEY = os.environ.get("GROQ_API_KEY", "").strip()
-GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+# 1. Environment Variables & Hugging Face Vault Setup
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 HF_TOKEN = os.environ.get("HF_TOKEN", "").strip()
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 VAULT_REPO = "Kumar5674/kalyan-kishore-vault"
 
-# Initialize Clients
-groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
-gemini_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
-hf_api = HfApi(token=HF_TOKEN) if HF_TOKEN else None
+hf_api = HfApi(token=HF_TOKEN) if HF_TOKEN else HfApi()
 
-# Helper: Extract pure Python code from any markdown/prose output
-def extract_pure_code(text: str) -> str:
-    # 1. Match code enclosed in ```python ... ```
-    match = re.search(r"```python\s*(.*?)\s*```", text, re.DOTALL | re.IGNORECASE)
-    if match:
-        return match.group(1).strip()
-    # 2. Match generic ``` ... ```
-    match = re.search(r"```\s*(.*?)\s*```", text, re.DOTALL)
-    if match:
-        return match.group(1).strip()
-    # 3. Fallback: filter lines
-    lines = []
-    for line in text.splitlines():
-        if line.strip().startswith("```") or line.strip().startswith("Here is") or line.strip().startswith("Note:"):
-            continue
-        lines.append(line)
-    return "\n".join(lines).strip()
-
-# 2. Resilient Inference (Groq -> Gemini Waterfall)
-def generate_solution(prompt: str) -> tuple[str, str]:
-    if groq_client:
+# ==============================================================================
+# 2. MULTI-MODEL INFERENCE WATERFALL (Groq 70B -> Groq 8B -> Gemini 1.5)
+# ==============================================================================
+def call_llm(prompt, system_prompt="You are an expert autonomous software engineer and quantitative scientist."):
+    """Waterfall LLM inference engine."""
+    # 1. Try Groq (Llama-3.3-70B then Llama-3.1-8B)
+    if GROQ_API_KEY:
         for model in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
             try:
-                res = groq_client.chat.completions.create(
-                    model=model,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.2,
-                    max_tokens=1800
-                )
-                if res.choices and res.choices[0].message.content:
-                    return res.choices[0].message.content, f"Groq/{model}"
+                url = "https://api.groq.com/openai/v1/chat/completions"
+                headers = {
+                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                    "Content-Type": "application/json"
+                }
+                payload = {
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": prompt}
+                    ],
+                    "temperature": 0.2
+                }
+                res = requests.post(url, headers=headers, json=payload, timeout=25)
+                if res.status_code == 200:
+                    return res.json()["choices"][0]["message"]["content"].strip(), f"Groq/{model}"
             except Exception:
-                continue
+                pass
+            time.sleep(1)
 
-    if gemini_client:
-        for model in ["gemini-2.5-flash", "gemini-2.0-flash"]:
-            try:
-                res = gemini_client.models.generate_content(model=model, contents=prompt)
-                if res and res.text:
-                    return res.text, f"Gemini/{model}"
-            except Exception:
-                continue
-
-    raise RuntimeError("All inference endpoints are currently busy.")
-
-# 3. Deterministic Sandbox Executor
-def run_in_sandbox(code_str: str) -> tuple[bool, str]:
-    test_path = "/tmp/action_sandbox_eval.py"
-    with open(test_path, "w", encoding="utf-8") as f:
-        f.write(code_str)
-    try:
-        proc = subprocess.run([sys.executable, test_path], capture_output=True, text=True, timeout=12)
-        passed = (proc.returncode == 0)
-        logs = proc.stdout.strip() if passed else proc.stderr.strip()
-        return passed, logs
-    except subprocess.TimeoutExpired:
-        return False, "Execution timed out (>12s)."
-    finally:
-        if os.path.exists(test_path):
-            os.remove(test_path)
-
-# 4. Domain Challenge Suite
-DOMAINS = {
-    "quant_finance": {
-        "title": "Quantitative Finance & Greeks",
-        "prompt": (
-            "Write a self-contained Python script implementing Black-Scholes formulas and analytical option Greeks (Delta, Gamma, Vega).\n"
-            "REQUIREMENTS:\n"
-            "- Use math and numpy only.\n"
-            "- Include exact functions for Call/Put price and Greeks.\n"
-            "- Include 4 assert statements at the bottom testing boundary conditions (e.g., deep ITM/OTM, positive Vega).\n"
-            "- Output ONLY valid Python code."
-        )
-    },
-    "cyber_security": {
-        "title": "Cybersecurity AST Auditor",
-        "prompt": (
-            "Write a self-contained Python security auditor using the standard 'ast' module.\n"
-            "REQUIREMENTS:\n"
-            "- Define an AST NodeVisitor checking for dangerous calls: eval, exec, os.system, and __import__.\n"
-            "- Include 4 assert statements evaluating safe vs. malicious code snippets.\n"
-            "- Output ONLY valid Python code."
-        )
-    },
-    "algo_systems": {
-        "title": "Algorithmic Systems & Structures",
-        "prompt": (
-            "Write a self-contained Python script implementing an LRU Cache with O(1) ops or a Trie with prefix search.\n"
-            "REQUIREMENTS:\n"
-            "- Pure Python standard library only.\n"
-            "- Include 4 assert statements verifying edge cases, eviction policies, or empty inputs.\n"
-            "- Output ONLY valid Python code."
-        )
-    }
-}
-
-# 5. Batch Execution Logic
-def execute_batch(total_cycles=6):
-    print("=" * 70)
-    print(f"🚀 INITIATING HIGH-YIELD RLVR WORKER ({total_cycles} CYCLES)")
-    print("=" * 70)
-
-    successful_runs = 0
-
-    for i in range(1, total_cycles + 1):
-        domain_key = random.choice(list(DOMAINS.keys()))
-        spec = DOMAINS[domain_key]
-        print(f"\n[Cycle {i}/{total_cycles}] Target: {spec['title']}")
-
+    # 2. Try Gemini via OpenAI-Compatible Gateway
+    if GEMINI_API_KEY:
         try:
-            raw_code, provider = generate_solution(spec["prompt"])
-            clean_code = extract_pure_code(raw_code)
-            print(f"⚡ Candidate generated via {provider}")
+            url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {GEMINI_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": "gemini-1.5-flash",
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": prompt}
+                ],
+                "temperature": 0.2
+            }
+            res = requests.post(url, headers=headers, json=payload, timeout=25)
+            if res.status_code == 200:
+                return res.json()["choices"][0]["message"]["content"].strip(), "Gemini/1.5-flash"
+        except Exception:
+            pass
 
-            passed, output = run_in_sandbox(clean_code)
-            attempts = 1
+    return None, "None"
 
-            # Self-Repair Loop
-            if not passed:
-                print(f"⚠️ Initial test failed ({output[:60]}...). Repairing...")
-                repair_prompt = (
-                    f"Fix this Python code. Error:\n{output}\n\nOriginal Code:\n{clean_code}\n\n"
-                    "Output ONLY the corrected valid Python code."
+def clean_python_code(raw_text):
+    """Extracts pure executable Python code from markdown blocks."""
+    if not raw_text:
+        return ""
+    if "```python" in raw_text:
+        return raw_text.split("```python")[1].split("```")[0].strip()
+    elif "```" in raw_text:
+        return raw_text.split("```")[1].split("```")[0].strip()
+    return raw_text.strip()
+
+# ==============================================================================
+# 3. TASK GENERATORS FOR ALL 3 DOMAINS
+# ==============================================================================
+
+def get_quant_task():
+    """Generates Quantitative Finance & Option Greeks tasks."""
+    tasks = [
+        {
+            "domain": "quant_finance",
+            "title": "Black-Scholes European Option Pricing & Greeks Calculator",
+            "prompt": (
+                "Write a Python function `calculate_black_scholes(S, K, T, r, sigma, option_type='call') -> dict` "
+                "that computes theoretical price, Delta, and Gamma for a European option.\n"
+                "Return a dict with keys: 'price', 'delta', 'gamma'. Use math or scipy.stats.norm."
+            ),
+            "test_code": """
+import math
+
+res_call = calculate_black_scholes(100, 100, 1.0, 0.05, 0.2, option_type='call')
+assert abs(res_call['price'] - 10.45) < 0.6, f"Call price inaccurate: {res_call['price']}"
+assert 0.5 < res_call['delta'] < 0.7, f"Call Delta inaccurate: {res_call['delta']}"
+assert res_call['gamma'] > 0, f"Gamma should be positive: {res_call['gamma']}"
+
+res_put = calculate_black_scholes(100, 100, 1.0, 0.05, 0.2, option_type='put')
+assert abs(res_put['price'] - 5.57) < 0.6, f"Put price inaccurate: {res_put['price']}"
+assert -0.5 < res_put['delta'] < -0.3, f"Put Delta inaccurate: {res_put['delta']}"
+print("✅ Quant assertions passed.")
+"""
+        },
+        {
+            "domain": "quant_finance",
+            "title": "Cash-and-Carry Arbitrage Spread Calculator",
+            "prompt": (
+                "Write a Python function `arbitrage_spread(spot_price, futures_price, r, T, storage_cost=0.0) -> dict` "
+                "that computes the theoretical forward price, theoretical basis/spread, and returns an arbitrage recommendation "
+                "('CASH_AND_CARRY', 'REVERSE_CASH_AND_CARRY', or 'NO_ARBITRAGE').\n"
+                "Return a dict with keys: 'forward_price', 'spread', 'action'."
+            ),
+            "test_code": """
+res1 = arbitrage_spread(1000, 1060, 0.05, 1.0)
+assert res1['forward_price'] > 1050 and res1['forward_price'] < 1052
+assert res1['spread'] > 0
+assert res1['action'] == 'CASH_AND_CARRY'
+
+res2 = arbitrage_spread(1000, 1000, 0.05, 1.0)
+assert res2['action'] == 'REVERSE_CASH_AND_CARRY'
+print("✅ Arbitrage assertions passed.")
+"""
+        }
+    ]
+    return random.choice(tasks)
+
+def get_algo_task():
+    """Generates Algorithmic Systems & Data Structures tasks."""
+    tasks = [
+        {
+            "domain": "algo_systems",
+            "title": "O(1) Least Recently Used (LRU) Cache Implementation",
+            "prompt": (
+                "Write a complete `LRUCache` class in Python supporting `get(key)` and `put(key, value)` in O(1) time complexity.\n"
+                "The constructor accepts `capacity: int`."
+            ),
+            "test_code": """
+lru = LRUCache(2)
+lru.put(1, 10)
+lru.put(2, 20)
+assert lru.get(1) == 10
+lru.put(3, 30) # evicts key 2
+assert lru.get(2) == -1 or lru.get(2) is None
+assert lru.get(3) == 30
+lru.put(4, 40) # evicts key 1
+assert lru.get(1) == -1 or lru.get(1) is None
+assert lru.get(4) == 40
+print("✅ LRU Cache assertions passed.")
+"""
+        },
+        {
+            "domain": "algo_systems",
+            "title": "Dijkstra Shortest Path with Priority Queue",
+            "prompt": (
+                "Write a Python function `dijkstra(graph: dict, start_node: str) -> dict` "
+                "that computes the shortest distance from `start_node` to all reachable nodes using `heapq`.\n"
+                "The graph is formatted as { 'A': [('B', 1), ('C', 4)], ... }."
+            ),
+            "test_code": """
+graph = {
+    'A': [('B', 1), ('C', 4)],
+    'B': [('C', 2), ('D', 5)],
+    'C': [('D', 1)],
+    'D': []
+}
+dist = dijkstra(graph, 'A')
+assert dist['A'] == 0
+assert dist['B'] == 1
+assert dist['C'] == 3
+assert dist['D'] == 4
+print("✅ Dijkstra assertions passed.")
+"""
+        }
+    ]
+    return random.choice(tasks)
+
+def get_cyber_ast_task():
+    """Generates Cybersecurity AST Static Analysis tasks with standardized visitor signatures."""
+    tasks = [
+        {
+            "domain": "cyber_ast",
+            "title": "AST Static Vulnerability & Dangerous Sink Detection",
+            "prompt": (
+                "Write a Python function `audit_code_ast(source_code: str) -> list` using Python's built-in `ast` module.\n"
+                "The function should inspect the Abstract Syntax Tree (AST) of the input code and detect dangerous sinks:\n"
+                "- Calls to `eval()` or `exec()`\n"
+                "- Calls to `os.system()` or `subprocess.Popen()` / `subprocess.run()` with `shell=True`\n"
+                "Return a list of strings describing any detected vulnerabilities (empty list if safe)."
+            ),
+            "test_code": """
+import ast
+
+safe_sample = "def add(a, b):\\n    return a + b\\nprint(add(2, 3))"
+eval_sample = "user_input = '__import__(\\'os\\').system(\\'ls\\')'\\neval(user_input)"
+exec_sample = "exec('import sys')"
+system_sample = "import os\\nos.system('rm -rf /')"
+
+safe_res = audit_code_ast(safe_sample)
+eval_res = audit_code_ast(eval_sample)
+exec_res = audit_code_ast(exec_sample)
+system_res = audit_code_ast(system_sample)
+
+assert len(safe_res) == 0, f"False positive on safe code: {safe_res}"
+assert any("eval" in str(r).lower() for r in eval_res), f"Missed eval sink: {eval_res}"
+assert any("exec" in str(r).lower() for r in exec_res), f"Missed exec sink: {exec_res}"
+assert any("system" in str(r).lower() or "os" in str(r).lower() for r in system_res), f"Missed os.system sink: {system_res}"
+print("✅ Cyber AST assertions passed.")
+"""
+        },
+        {
+            "domain": "cyber_ast",
+            "title": "AST Static Detection of Hardcoded High-Entropy Secrets",
+            "prompt": (
+                "Write a Python function `audit_secrets_ast(source_code: str) -> list` using Python's `ast` module.\n"
+                "The function should inspect all string assignments (`ast.Assign`) where the variable name contains "
+                "keywords like `api_key`, `secret`, `password`, `token` (case-insensitive) and the assigned value is a non-empty string literal.\n"
+                "Return a list of detected variable names."
+            ),
+            "test_code": """
+import ast
+
+code_clean = "x = 10\\nusername = 'admin'"
+code_leak = "API_KEY = 'sk-live-99384918239'\\ndb_password = 'SuperSecret123!'\\nnormal_var = 'hello'"
+
+assert len(audit_secrets_ast(code_clean)) == 0, "False positive on clean code"
+detected = [str(x).upper() for x in audit_secrets_ast(code_leak)]
+assert any("API_KEY" in d for d in detected), "Failed to detect API_KEY"
+assert any("DB_PASSWORD" in d for d in detected), "Failed to detect db_password"
+print("✅ AST Secret Detection assertions passed.")
+"""
+        }
+    ]
+    return random.choice(tasks)
+
+# ==============================================================================
+# 4. DETERMINISTIC SANDBOX EXECUTION & SELF-REPAIR
+# ==============================================================================
+
+def execute_in_sandbox(candidate_code, test_harness):
+    """Executes the candidate code combined with unit assertions in an isolated process."""
+    combined_script = f"{candidate_code}\n\n{test_harness}"
+    temp_path = "/tmp/action_sandbox_eval.py"
+    with open(temp_path, "w", encoding="utf-8") as f:
+        f.write(combined_script)
+
+    try:
+        res = subprocess.run(
+            [sys.executable, temp_path],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if res.returncode == 0:
+            return True, "All assertions passed"
+        else:
+            return False, (res.stderr or res.stdout).strip()
+    except subprocess.TimeoutExpired:
+        return False, "Execution timed out (>10s)"
+    except Exception as e:
+        return False, str(e)
+
+def run_reasoning_cycle(cycle_num, total_cycles, target_domain):
+    """Runs a single RLVR cycle with automated self-repair."""
+    # Pick domain generator
+    if target_domain == "quant_finance":
+        task = get_quant_task()
+        domain_label = "Quantitative Finance & Greeks"
+    elif target_domain == "cyber_ast":
+        task = get_cyber_ast_task()
+        domain_label = "Cybersecurity AST Auditor"
+    else:
+        task = get_algo_task()
+        domain_label = "Algorithmic Systems & Structures"
+
+    print(f"\n[Cycle {cycle_num}/{total_cycles}] Target: {domain_label}")
+    
+    # 1. Initial Generation
+    gen_prompt = f"{task['prompt']}\n\nProvide only valid, complete, and bug-free Python code."
+    raw_response, model_name = call_llm(gen_prompt)
+    if not raw_response:
+        print("  ⚠️ Inference endpoints busy/rate-limited.")
+        return False
+
+    code = clean_python_code(raw_response)
+    print(f"  ⚡ Candidate generated via {model_name}")
+
+    # 2. First Sandbox Evaluation
+    passed, logs = execute_in_sandbox(code, task["test_code"])
+    
+    # 3. Automated Self-Repair Loop if initial test failed
+    if not passed:
+        print(f"  ⚠️ Initial test failed ({logs[:80]}...). Repairing...")
+        repair_prompt = f"""
+The following Python implementation failed unit test verification.
+Original Task:
+{task['prompt']}
+
+Your Code:
+{code}
+
+Error / Traceback:
+{logs}
+
+Fix all errors and return the complete corrected Python code.
+"""
+        repaired_raw, _ = call_llm(repair_prompt)
+        if repaired_raw:
+            code = clean_python_code(repaired_raw)
+            passed, logs = execute_in_sandbox(code, task["test_code"])
+
+    # 4. Vault Upload upon passing verification
+    if passed:
+        print("  ✅ PASSED on Verification (Reward: 1.00)")
+        timestamp = int(time.time())
+        filename = f"trace_{task['domain']}_{timestamp}.json"
+        vault_path = f"memory_vault/{task['domain']}/{filename}"
+
+        payload = {
+            "timestamp": timestamp,
+            "domain": task["domain"],
+            "title": task["title"],
+            "prompt": task["prompt"],
+            "code": code,
+            "test_harness": task["test_code"],
+            "reward": 1.00,
+            "status": "VERIFIED_PASS",
+            "model": model_name
+        }
+
+        if HF_TOKEN:
+            try:
+                local_file = f"/tmp/{filename}"
+                with open(local_file, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, indent=2)
+
+                hf_api.upload_file(
+                    path_or_fileobj=local_file,
+                    path_in_repo=vault_path,
+                    repo_id=VAULT_REPO,
+                    repo_type="model"
                 )
-                repair_raw, _ = generate_solution(repair_prompt)
-                clean_code = extract_pure_code(repair_raw)
-                passed, output = run_in_sandbox(clean_code)
-                attempts = 2
+                print(f"  ☁️ Uploaded trajectory -> {vault_path}")
+                return True
+            except Exception as e:
+                print(f"  ⚠️ Vault upload notice: {e}")
+        return True
+    else:
+        print(f"  ❌ Discarded (Failed sandbox assertions: {logs[:100]}).")
+        return False
 
-            if passed:
-                reward = 1.0 / attempts
-                successful_runs += 1
-                print(f"✅ PASSED on Attempt #{attempts} (Reward: {reward:.2f})")
+# ==============================================================================
+# 5. MAIN BATCH CONTROLLER
+# ==============================================================================
+def main():
+    print("==================================================================")
+    print("🚀 INITIATING HIGH-YIELD RLVR WORKER (6 CYCLES)")
+    print("==================================================================")
 
-                # Sync to Hugging Face Vault
-                if hf_api:
-                    fname = f"trace_{domain_key}_{int(time.time())}.json"
-                    payload = {
-                        "timestamp": int(time.time()),
-                        "domain": domain_key,
-                        "domain_title": spec["title"],
-                        "provider": provider,
-                        "attempts": attempts,
-                        "reward": reward,
-                        "verified": True,
-                        "solution_code": clean_code
-                    }
-                    with open(fname, "w", encoding="utf-8") as f:
-                        json.dump(payload, f, indent=2)
+    # 6 balanced cycles: 2 Quant Finance, 2 Algo Systems, 2 Cybersecurity AST
+    domains = [
+        "quant_finance",
+        "algo_systems",
+        "cyber_ast",
+        "quant_finance",
+        "algo_systems",
+        "cyber_ast"
+    ]
 
-                    hf_api.upload_file(
-                        path_or_fileobj=fname,
-                        path_in_repo=f"memory_vault/{domain_key}/{fname}",
-                        repo_id=VAULT_REPO,
-                        repo_type="model"
-                    )
-                    if os.path.exists(fname):
-                        os.remove(fname)
-                    print(f"☁️ Uploaded trajectory -> memory_vault/{domain_key}/{fname}")
-            else:
-                print(f"❌ Discarded (Failed sandbox assertions).")
+    successes = 0
+    for idx, domain in enumerate(domains, 1):
+        if run_reasoning_cycle(idx, len(domains), domain):
+            successes += 1
+        time.sleep(2)  # Prevent rate limits
 
-        except Exception as e:
-            print(f"⚠️ Cycle error: {e}")
-
-        time.sleep(3)
-
-    print("\n" + "=" * 70)
-    print(f"📊 Summary: {successful_runs}/{total_cycles} verified trajectories uploaded to {VAULT_REPO}")
-    print("=" * 70)
+    print("==================================================================")
+    print(f"📊 Summary: {successes}/{len(domains)} verified trajectories uploaded to {VAULT_REPO}")
+    print("==================================================================")
 
 if __name__ == "__main__":
-    execute_batch(total_cycles=6)
+    main()
+    
