@@ -19,41 +19,60 @@ VAULT_REPO = "Kumar5674/kalyan-kishore-vault"
 hf_api = HfApi(token=HF_TOKEN) if HF_TOKEN else HfApi()
 
 def call_llm_inference(prompt, system_prompt="You are an expert autonomous software engineer."):
-    """Multi-tiered LLM routing: Groq -> Gemini -> Fallback."""
-    # 1. Groq Llama-3.3-70b
+    """Multi-tiered LLM routing: Groq 70B -> Groq 8B -> Gemini OpenAI-Compatible."""
+    
+    # 1. Try Groq (Llama-3.3-70B, then Llama-3.1-8B)
     if GROQ_API_KEY:
+        for model in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
+            try:
+                url = "https://api.groq.com/openai/v1/chat/completions"
+                headers = {
+                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                    "Content-Type": "application/json"
+                }
+                payload = {
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": prompt}
+                    ],
+                    "temperature": 0.2
+                }
+                res = requests.post(url, headers=headers, json=payload, timeout=30)
+                if res.status_code == 200:
+                    return res.json()["choices"][0]["message"]["content"].strip()
+                else:
+                    print(f"⚠️ Groq ({model}) HTTP {res.status_code}: {res.text[:100]}")
+            except Exception as e:
+                print(f"⚠️ Groq ({model}) notice: {e}")
+            time.sleep(2)  # Brief pause between model retries
+
+    # 2. Try Gemini via OpenAI-Compatible Gateway
+    if GEMINI_API_KEY:
         try:
-            url = "https://api.groq.com/openai/v1/chat/completions"
-            headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+            url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {GEMINI_API_KEY}",
+                "Content-Type": "application/json"
+            }
             payload = {
-                "model": "llama-3.3-70b-versatile",
+                "model": "gemini-1.5-flash",
                 "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": prompt}
                 ],
                 "temperature": 0.2
             }
-            res = requests.post(url, headers=headers, json=payload, timeout=25)
+            res = requests.post(url, headers=headers, json=payload, timeout=30)
             if res.status_code == 200:
                 return res.json()["choices"][0]["message"]["content"].strip()
-        except Exception as e:
-            print(f"⚠️ Groq inference notice: {e}")
-
-    # 2. Gemini Fallback
-    if GEMINI_API_KEY:
-        try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-            headers = {"Content-Type": "application/json"}
-            payload = {
-                "contents": [{"parts": [{"text": f"{system_prompt}\n\nTask:\n{prompt}"}]}]
-            }
-            res = requests.post(url, headers=headers, json=payload, timeout=25)
-            if res.status_code == 200:
-                return res.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+            else:
+                print(f"⚠️ Gemini HTTP {res.status_code}: {res.text[:100]}")
         except Exception as e:
             print(f"⚠️ Gemini inference notice: {e}")
 
     return None
+
 
 def scan_github_micro_tasks():
     """Scans live GitHub repositories for good-first-issues and bounty tickets."""
