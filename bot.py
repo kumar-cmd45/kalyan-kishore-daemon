@@ -1,183 +1,202 @@
-# ==============================================================================
-# KALYAN KISHORE MASTER BOT & PUBLIC MICRO-API GATEWAY (bot.py)
-# Zero-Capital / Zero-Client / Stateless HTTP Engine
-# ==============================================================================
 import os
-import ast
-import math
+import re
 import json
-import requests
+import time
 import telebot
-from flask import Flask, request, jsonify
-from huggingface_hub import HfApi
-
-# 1. Environment & Telegram Setup
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
-WEBHOOK_URL = os.environ.get("RENDER_EXTERNAL_URL", "").strip()
-RAPIDAPI_SECRET = os.environ.get("RAPIDAPI_PROXY_SECRET", "").strip()
-VAULT_REPO = "Kumar5674/kalyan-kishore-vault"
-
-bot = telebot.TeleBot(BOT_TOKEN) if BOT_TOKEN else None
-app = Flask(__name__)
-hf_api = HfApi()
+from huggingface_hub import HfApi, hf_hub_download
 
 # ==============================================================================
-# DETERMINISTIC MICRO-API ENDPOINTS (Render Hosted / RapidAPI Compatible)
+# CONFIGURATION & INITIALIZATION
 # ==============================================================================
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+HF_TOKEN = os.environ.get("HF_TOKEN", "")
+VAULT_REPO = os.environ.get("VAULT_REPO", "Kumar5674/kalyan-kishore-vault")
 
-def verify_api_request():
-    """Optional security check for RapidAPI proxy secret."""
-    if not RAPIDAPI_SECRET:
-        return True
-    proxy_secret = request.headers.get("X-RapidAPI-Proxy-Secret", "")
-    return proxy_secret == RAPIDAPI_SECRET
+bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN, parse_mode="Markdown")
+hf_api = HfApi(token=HF_TOKEN)
 
-@app.route('/api/v1/quant/pricing', methods=['POST'])
-def quant_pricing_api():
-    """Calculates Black-Scholes Greeks and Cash-and-Carry theoretical futures basis."""
-    if not verify_api_request():
-        return jsonify({"error": "Unauthorized"}), 401
+# Block known spam/star-farming templates
+SUSPICIOUS_PHRASES = [
+    "instructions for ai agents",
+    "star the repository",
+    "/user/starred",
+    "create another issue with the same contents"
+]
 
-    data = request.get_json(force=True, silent=True) or {}
+# ==============================================================================
+# HELPER FUNCTIONS
+# ==============================================================================
+def get_vault_files():
+    """Lists all files stored in the Hugging Face vault repository."""
     try:
-        S = float(data.get("spot_price", 100.0))
-        K = float(data.get("strike_price", 100.0))
-        T = float(data.get("time_to_expiry_years", 1.0))
-        r = float(data.get("risk_free_rate", 0.05))
-        sigma = float(data.get("volatility", 0.20))
-        div_yield = float(data.get("dividend_yield", 0.0))
-
-        # Black-Scholes Calculation
-        d1 = (math.log(S / K) + (r - div_yield + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
-        d2 = d1 - sigma * math.sqrt(T)
-
-        call_delta = math.exp(-div_yield * T) * 0.5 * (1.0 + math.erf(d1 / math.sqrt(2.0)))
-        put_delta = call_delta - math.exp(-div_yield * T)
-        gamma = (math.exp(-div_yield * T) / (S * sigma * math.sqrt(T))) * (1.0 / math.sqrt(2 * math.pi)) * math.exp(-0.5 * d1 ** 2)
-        vega = S * math.exp(-div_yield * T) * math.sqrt(T) * (1.0 / math.sqrt(2 * math.pi)) * math.exp(-0.5 * d1 ** 2) / 100.0
-        
-        # Cash and Carry Basis
-        theoretical_futures = S * math.exp((r - div_yield) * T)
-        basis_spread = theoretical_futures - S
-
-        return jsonify({
-            "status": "success",
-            "model": "Black-Scholes-Merton (1973)",
-            "metrics": {
-                "call_delta": round(call_delta, 6),
-                "put_delta": round(put_delta, 6),
-                "gamma": round(gamma, 6),
-                "vega_1pct": round(vega, 6),
-                "theoretical_futures_price": round(theoretical_futures, 4),
-                "basis_spread": round(basis_spread, 4)
-            }
-        }), 200
+        return hf_api.list_repo_files(repo_id=VAULT_REPO, repo_type="model")
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 400
+        print(f"Error fetching repo files: {e}")
+        return []
 
-@app.route('/api/v1/security/ast-audit', methods=['POST'])
-def ast_security_audit_api():
-    """Performs deterministic AST static vulnerability analysis on submitted Python code."""
-    if not verify_api_request():
-        return jsonify({"error": "Unauthorized"}), 401
-
-    data = request.get_json(force=True, silent=True) or {}
-    code_snippet = data.get("code", "")
-    if not code_snippet:
-        return jsonify({"status": "error", "message": "Field 'code' is required."}), 400
-
-    vulnerabilities = []
-    try:
-        parsed_tree = ast.parse(code_snippet)
-        for node in ast.walk(parsed_tree):
-            # Check for OS Command Injection Sinks
-            if isinstance(node, ast.Call):
-                if isinstance(node.func, ast.Attribute) and node.func.attr in ["system", "popen"]:
-                    vulnerabilities.append({
-                        "type": "CWE-78: OS Command Injection",
-                        "severity": "CRITICAL",
-                        "line": node.lineno,
-                        "sink": f"os.{node.func.attr}",
-                        "recommendation": "Use subprocess.run(..., shell=False) with parameterized arguments."
-                    })
-                elif isinstance(node.func, ast.Name) and node.func.id in ["eval", "exec"]:
-                    vulnerabilities.append({
-                        "type": "CWE-95: Improper Code Evaluation",
-                        "severity": "HIGH",
-                        "line": node.lineno,
-                        "sink": node.func.id,
-                        "recommendation": "Avoid dynamic code execution; use ast.literal_eval() if deserializing data."
-                    })
-
-        return jsonify({
-            "status": "vulnerabilities_detected" if vulnerabilities else "clean",
-            "findings_count": len(vulnerabilities),
-            "findings": vulnerabilities
-        }), 200
-    except SyntaxError as syn_err:
-        return jsonify({"status": "syntax_error", "message": str(syn_err)}), 400
+def load_json_file(file_path: str) -> dict:
+    """Downloads and parses a JSON file from Hugging Face."""
+    local_path = hf_hub_download(
+        repo_id=VAULT_REPO,
+        filename=file_path,
+        repo_type="model",
+        token=HF_TOKEN if HF_TOKEN else None
+    )
+    with open(local_path, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 # ==============================================================================
-# TELEGRAM BOT CONTROLLER & WEBHOOK
+# BOT COMMAND HANDLERS
 # ==============================================================================
-
-@app.route('/webhook', methods=['POST'])
-def telegram_webhook():
-    if request.headers.get('content-type') == 'application/json':
-        json_string = request.get_data().decode('utf-8')
-        update = telebot.types.Update.de_json(json_string)
-        bot.process_new_updates([update])
-        return '', 200
-    return 'Invalid', 403
+@bot.message_handler(commands=['start', 'help'])
+def send_welcome(message):
+    welcome_text = (
+        "🤖 *Kalyan Kishore Master Telemetry Bot*\n\n"
+        "*Available Commands:*\n"
+        "• `/status` — View real-time vault telemetry & metrics\n"
+        "• `/bounties` — List all solved issue bounties\n"
+        "• `/bounty <number>` — Inspect a specific bounty & patch\n"
+        "• `/latest` — View the single most recent bounty solution\n"
+        "• `/help` — Show this command directory"
+    )
+    bot.reply_to(message, welcome_text)
 
 @bot.message_handler(commands=['status'])
 def send_status(message):
+    """Calculates categories and trajectory counts directly from the HF vault."""
     try:
-        files = hf_api.list_repo_files(repo_id=VAULT_REPO, repo_type="model")
-        quant_count = len([f for f in files if f.startswith("memory_vault/quant_finance/")])
-        algo_count = len([f for f in files if f.startswith("memory_vault/algo_systems/")])
-        cyber_count = len([f for f in files if f.startswith("memory_vault/cyber_ast/")])
-        bounty_count = len([f for f in files if f.startswith("memory_vault/bounties/")])
-        total_count = quant_count + algo_count + cyber_count
+        files = get_vault_files()
+        
+        # Categorize trajectories
+        quant_count = 0
+        algo_count = 0
+        ast_count = 0
+        bounty_files = [f for f in files if f.startswith("memory_vault/bounties/") and f.endswith(".json")]
+        trajectory_files = [f for f in files if f.startswith("memory_vault/") and not f.startswith("memory_vault/bounties/") and f.endswith(".json")]
+
+        for f in trajectory_files:
+            if "quant" in f.lower() or "finance" in f.lower():
+                quant_count += 1
+            elif "ast" in f.lower() or "security" in f.lower():
+                ast_count += 1
+            else:
+                algo_count += 1
+
+        total_trajectories = len(trajectory_files) + len(bounty_files)
 
         telemetry = (
+            "```\n"
             "=== LIVE SYSTEM TELEMETRY ===\n"
             f"• Vault Repository: {VAULT_REPO}\n"
-            f"• Total Verified Trajectories: {total_count}\n"
+            f"• Total Verified Trajectories: {total_trajectories}\n"
             f"  - Quantitative Finance: {quant_count}\n"
             f"  - Algorithmic Systems: {algo_count}\n"
-            f"  - Cyber Security AST: {cyber_count}\n"
-            f"  - Verified Bounties: {bounty_count}\n"
-            "• Public APIs: /api/v1/quant/pricing | /api/v1/security/ast-audit\n"
-            "• Background Worker: GitHub Actions (Hourly Batch)\n"
-            "============================="
+            f"  - Cyber Security AST: {ast_count}\n"
+            f"  - Verified Bounties: {len(bounty_files)}\n"
+            "• Background Worker: GitHub Actions (24/7 cron)\n"
+            "==============================\n"
+            "```"
         )
-        bot.reply_to(message, telemetry)
+        bot.send_message(message.chat.id, telemetry)
     except Exception as e:
-        bot.reply_to(message, f"Telemetry Error: {str(e)}")
+        bot.reply_to(message, f"❌ Failed to compute telemetry: {str(e)}")
 
-@app.route('/', methods=['GET'])
-def health():
-    return "Kalyan Kishore Engine Active (APIs & Webhooks Online)", 200
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
 @bot.message_handler(commands=['bounties'])
-def show_all_bounties(message):
-    files = api.list_repo_files(repo_id="Kumar5674/kalyan-kishore-vault", repo_type="model")
-    b_files = [f for f in files if f.startswith("memory_vault/bounties/")][-5:]
-    
-    if not b_files:
-        bot.reply_to(message, "⚠️ No bounties in vault.")
-        return
+def list_all_bounties(message):
+    """Displays a numbered list of all verified bounties in the vault."""
+    try:
+        files = get_vault_files()
+        bounty_files = sorted([f for f in files if f.startswith("memory_vault/bounties/") and f.endswith(".json")])
 
-    text = "🎯 *Vaulted Bounties:*\n\n"
-    for idx, bf in enumerate(b_files, 1):
-        p = hf_hub_download(repo_id="Kumar5674/kalyan-kishore-vault", filename=bf, repo_type="model")
-        with open(p, "r") as f:
-            d = json.load(f)
-            b = d.get("bounty", {})
-            text += f"{idx}. *${b.get('reward', 0)}* — [{b.get('title')}]({b.get('url')})\n\n"
-    
-    bot.send_message(message.chat.id, text, parse_mode="Markdown", disable_web_page_preview=True)
+        if not bounty_files:
+            bot.reply_to(message, "⚠️ No bounties currently recorded in vault.")
+            return
+
+        bot.send_message(message.chat.id, f"🎯 *Found {len(bounty_files)} Bounties in Vault:*\n")
+
+        for idx, file_path in enumerate(bounty_files, start=1):
+            data = load_json_file(file_path)
+            b = data.get("bounty", {})
+            title = b.get("title", "Untitled Bounty Task")
+            reward = b.get("reward", "N/A")
+            url = b.get("url", "https://github.com")
+
+            # Check for spam flags
+            body_text = b.get("body", "") + " " + json.dumps(data.get("solution_patch", ""))
+            is_spam = any(phrase in body_text.lower() for phrase in SUSPICIOUS_PHRASES)
+            warning_tag = " ⚠️ *(Suspected Spam / Star-Farm)*" if is_spam else ""
+
+            card = (
+                f"*{idx}. {title}*{warning_tag}\n"
+                f"💰 *Reward:* ${reward} USD\n"
+                f"🔗 [Open GitHub Issue]({url})\n"
+                f"👉 _Type `/bounty {idx}` to view full code solution._"
+            )
+            bot.send_message(message.chat.id, card, disable_web_page_preview=True)
+            time.sleep(0.3)
+
+    except Exception as e:
+        bot.reply_to(message, f"❌ Error retrieving bounties: {str(e)}")
+
+@bot.message_handler(commands=['bounty'])
+def view_single_bounty(message):
+    """Fetches full solution and code patch for a specific bounty by index."""
+    try:
+        args = message.text.split()
+        if len(args) < 2 or not args[1].isdigit():
+            bot.reply_to(message, "⚠️ Please specify a bounty number. Example: `/bounty 1`")
+            return
+
+        target_idx = int(args[1]) - 1
+        files = get_vault_files()
+        bounty_files = sorted([f for f in files if f.startswith("memory_vault/bounties/") and f.endswith(".json")])
+
+        if target_idx < 0 or target_idx >= len(bounty_files):
+            bot.reply_to(message, f"❌ Invalid bounty number. Available range: 1 to {len(bounty_files)}")
+            return
+
+        data = load_json_file(bounty_files[target_idx])
+        b = data.get("bounty", {})
+        patch = data.get("solution_patch", "No patch code found.")
+
+        header = (
+            f"🎯 *Bounty #{target_idx + 1} Solution Card*\n\n"
+            f"• *Title:* {b.get('title', 'N/A')}\n"
+            f"• *Reward:* ${b.get('reward', 'N/A')} USD\n"
+            f"• *URL:* {b.get('url', 'N/A')}\n\n"
+            f"📝 *Generated Solution Patch:*"
+        )
+        bot.send_message(message.chat.id, header, disable_web_page_preview=True)
+
+        # Telegram 4096 character limit protection
+        if len(patch) > 3500:
+            patch = patch[:3500] + "\n\n... [Truncated due to Telegram message length limit]"
+
+        bot.send_message(message.chat.id, f"```diff\n{patch}\n```")
+
+    except Exception as e:
+        bot.reply_to(message, f"❌ Error fetching bounty details: {str(e)}")
+
+@bot.message_handler(commands=['latest'])
+def view_latest_bounty(message):
+    """Fetches the latest bounty added to the repository."""
+    try:
+        files = get_vault_files()
+        bounty_files = sorted([f for f in files if f.startswith("memory_vault/bounties/") and f.endswith(".json")])
+        if not bounty_files:
+            bot.reply_to(message, "⚠️ No bounties in vault.")
+            return
+
+        latest_idx = len(bounty_files)
+        message.text = f"/bounty {latest_idx}"
+        view_single_bounty(message)
+    except Exception as e:
+        bot.reply_to(message, f"❌ Error loading latest bounty: {str(e)}")
+
+# ==============================================================================
+# MAIN EXECUTION LOOP
+# ==============================================================================
+if __name__ == "__main__":
+    print("🚀 Kalyan Kishore Telemetry Bot online...")
+    bot.infinity_polling(timeout=20, long_polling_timeout=10)
     
