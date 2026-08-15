@@ -13,9 +13,9 @@ HF_TOKEN = os.environ.get("HF_TOKEN", "")
 VAULT_REPO = os.environ.get("VAULT_REPO", "Kumar5674/kalyan-kishore-vault")
 
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN, parse_mode="Markdown")
-hf_api = HfApi(token=HF_TOKEN)
+hf_api = HfApi(token=HF_TOKEN if HF_TOKEN else None)
 
-# Block known spam/star-farming templates
+# Honeypot / prompt-injection templates filter
 SUSPICIOUS_PHRASES = [
     "instructions for ai agents",
     "star the repository",
@@ -24,7 +24,7 @@ SUSPICIOUS_PHRASES = [
 ]
 
 # ==============================================================================
-# HELPER FUNCTIONS
+# SAFE PARSERS & VAULT UTILITIES
 # ==============================================================================
 def get_vault_files():
     """Lists all files stored in the Hugging Face vault repository."""
@@ -45,6 +45,62 @@ def load_json_file(file_path: str) -> dict:
     with open(local_path, "r", encoding="utf-8") as f:
         return json.load(f)
 
+def extract_bounty_details(data: dict) -> dict:
+    """
+    Robust metadata extractor supporting flat schemas, nested dictionaries,
+    and multiple field naming variations.
+    """
+    bounty_dict = data.get("bounty", {}) if isinstance(data.get("bounty"), dict) else {}
+    
+    # Extract Title
+    title = (
+        data.get("title") 
+        or bounty_dict.get("title") 
+        or data.get("task") 
+        or data.get("task_title") 
+        or data.get("issue_title")
+        or "Bounty Solution"
+    )
+    
+    # Extract Reward
+    reward = (
+        data.get("reward") 
+        or bounty_dict.get("reward") 
+        or data.get("bounty_amount") 
+        or data.get("payout") 
+        or data.get("amount")
+        or "N/A"
+    )
+    
+    # Extract Issue URL
+    url = (
+        data.get("url") 
+        or bounty_dict.get("url") 
+        or data.get("issue_url") 
+        or data.get("html_url") 
+        or data.get("link") 
+        or "https://github.com"
+    )
+    
+    # Extract Patch / Diff / Code
+    patch = (
+        data.get("solution_patch") 
+        or bounty_dict.get("solution_patch")
+        or data.get("patch") 
+        or data.get("diff") 
+        or data.get("code") 
+        or data.get("solution") 
+        or data.get("response") 
+        or "No patch code found."
+    )
+    
+    return {
+        "title": str(title).strip(),
+        "reward": str(reward).replace("$", "").strip(),
+        "url": str(url).strip(),
+        "patch": str(patch).strip()
+    }
+
 # ==============================================================================
 # BOT COMMAND HANDLERS
 # ==============================================================================
@@ -53,11 +109,11 @@ def send_welcome(message):
     welcome_text = (
         "🤖 *Kalyan Kishore Master Telemetry Bot*\n\n"
         "*Available Commands:*\n"
-        "• `/status` — View real-time vault telemetry & metrics\n"
-        "• `/bounties` — List all solved issue bounties\n"
-        "• `/bounty <number>` — Inspect a specific bounty & patch\n"
-        "• `/latest` — View the single most recent bounty solution\n"
-        "• `/help` — Show this command directory"
+        "• `/status` — View real-time vault trajectory counts\n"
+        "• `/bounties` — List all solved bounties with direct links\n"
+        "• `/bounty <number>` — View the exact code patch for a task\n"
+        "• `/latest` — View the most recent bounty solution\n"
+        "• `/help` — Display this command directory"
     )
     bot.reply_to(message, welcome_text)
 
@@ -67,7 +123,6 @@ def send_status(message):
     try:
         files = get_vault_files()
         
-        # Categorize trajectories
         quant_count = 0
         algo_count = 0
         ast_count = 0
@@ -75,9 +130,10 @@ def send_status(message):
         trajectory_files = [f for f in files if f.startswith("memory_vault/") and not f.startswith("memory_vault/bounties/") and f.endswith(".json")]
 
         for f in trajectory_files:
-            if "quant" in f.lower() or "finance" in f.lower():
+            f_lower = f.lower()
+            if "quant" in f_lower or "finance" in f_lower:
                 quant_count += 1
-            elif "ast" in f.lower() or "security" in f.lower():
+            elif "ast" in f_lower or "security" in f_lower:
                 ast_count += 1
             else:
                 algo_count += 1
@@ -101,7 +157,7 @@ def send_status(message):
     except Exception as e:
         bot.reply_to(message, f"❌ Failed to compute telemetry: {str(e)}")
 
-@bot.message_handler(commands=['bounties'])
+@bot.message_handler(commands=['bounties', 'all_bounties'])
 def list_all_bounties(message):
     """Displays a numbered list of all verified bounties in the vault."""
     try:
@@ -116,20 +172,17 @@ def list_all_bounties(message):
 
         for idx, file_path in enumerate(bounty_files, start=1):
             data = load_json_file(file_path)
-            b = data.get("bounty", {})
-            title = b.get("title", "Untitled Bounty Task")
-            reward = b.get("reward", "N/A")
-            url = b.get("url", "https://github.com")
+            details = extract_bounty_details(data)
 
-            # Check for spam flags
-            body_text = b.get("body", "") + " " + json.dumps(data.get("solution_patch", ""))
-            is_spam = any(phrase in body_text.lower() for phrase in SUSPICIOUS_PHRASES)
+            # Check for spam/star-farm honeypots
+            full_str = json.dumps(data).lower()
+            is_spam = any(phrase in full_str for phrase in SUSPICIOUS_PHRASES)
             warning_tag = " ⚠️ *(Suspected Spam / Star-Farm)*" if is_spam else ""
 
             card = (
-                f"*{idx}. {title}*{warning_tag}\n"
-                f"💰 *Reward:* ${reward} USD\n"
-                f"🔗 [Open GitHub Issue]({url})\n"
+                f"*{idx}. {details['title']}*{warning_tag}\n"
+                f"💰 *Reward:* ${details['reward']} USD\n"
+                f"🔗 [Open GitHub Issue]({details['url']})\n"
                 f"👉 _Type `/bounty {idx}` to view full code solution._"
             )
             bot.send_message(message.chat.id, card, disable_web_page_preview=True)
@@ -156,21 +209,21 @@ def view_single_bounty(message):
             return
 
         data = load_json_file(bounty_files[target_idx])
-        b = data.get("bounty", {})
-        patch = data.get("solution_patch", "No patch code found.")
+        details = extract_bounty_details(data)
+        patch = details["patch"]
 
         header = (
             f"🎯 *Bounty #{target_idx + 1} Solution Card*\n\n"
-            f"• *Title:* {b.get('title', 'N/A')}\n"
-            f"• *Reward:* ${b.get('reward', 'N/A')} USD\n"
-            f"• *URL:* {b.get('url', 'N/A')}\n\n"
+            f"• *Title:* {details['title']}\n"
+            f"• *Reward:* ${details['reward']} USD\n"
+            f"• *URL:* {details['url']}\n\n"
             f"📝 *Generated Solution Patch:*"
         )
         bot.send_message(message.chat.id, header, disable_web_page_preview=True)
 
-        # Telegram 4096 character limit protection
+        # Truncate if exceeding Telegram 4096-character limit
         if len(patch) > 3500:
-            patch = patch[:3500] + "\n\n... [Truncated due to Telegram message length limit]"
+            patch = patch[:3500] + "\n\n... [Truncated due to Telegram length limit]"
 
         bot.send_message(message.chat.id, f"```diff\n{patch}\n```")
 
@@ -179,7 +232,7 @@ def view_single_bounty(message):
 
 @bot.message_handler(commands=['latest'])
 def view_latest_bounty(message):
-    """Fetches the latest bounty added to the repository."""
+    """Fetches the newest bounty in the vault."""
     try:
         files = get_vault_files()
         bounty_files = sorted([f for f in files if f.startswith("memory_vault/bounties/") and f.endswith(".json")])
@@ -197,6 +250,6 @@ def view_latest_bounty(message):
 # MAIN EXECUTION LOOP
 # ==============================================================================
 if __name__ == "__main__":
-    print("🚀 Kalyan Kishore Telemetry Bot online...")
+    print("🚀 Kalyan Kishore Master Telemetry Bot online...")
     bot.infinity_polling(timeout=20, long_polling_timeout=10)
     
