@@ -1,7 +1,5 @@
 # ==============================================================================
 # KALYAN KISHORE - AUTONOMOUS MONETARY BOUNTY ENGINE (economic_agent.py)
-# Filter: Strictly Paid Bounties (>= $10 USD / Crypto Equivalent)
-# Output: Human-Grade Git Pull Request & Unified Diff
 # ==============================================================================
 import os
 import re
@@ -16,12 +14,27 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
 HF_TOKEN = os.environ.get("HF_TOKEN", "").strip()
 GITHUB_TOKEN = os.environ.get("GITHUB_PAT") or os.environ.get("GITHUB_TOKEN") or ""
 VAULT_REPO = "Kumar5674/kalyan-kishore-vault"
-MINIMUM_BOUNTY_USD = 10.0  # Strict minimum reward threshold ($10+)
+MINIMUM_BOUNTY_USD = 10.0
 
 hf_api = HfApi(token=HF_TOKEN) if HF_TOKEN else HfApi()
 
+SUSPICIOUS_PHRASES = [
+    "instructions for ai agents",
+    "star the repository",
+    "/user/starred",
+    "create another issue with the same contents"
+]
+
+def is_legitimate_bounty(issue_title: str, issue_body: str) -> bool:
+    """Blocks prompt injections and star-farming honeypots."""
+    combined = f"{issue_title} {issue_body}".lower()
+    for phrase in SUSPICIOUS_PHRASES:
+        if phrase in combined:
+            print("🚨 Alert: Blocked a prompt injection / star-farming fake bounty.")
+            return False
+    return True
+
 def call_llm_inference(prompt, system_prompt="You are a senior open-source contributor."):
-    """Multi-tiered LLM routing for surgical PR patch generation."""
     if GROQ_API_KEY:
         for model in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
             try:
@@ -63,15 +76,9 @@ def call_llm_inference(prompt, system_prompt="You are a senior open-source contr
     return None
 
 def extract_monetary_reward(text, min_val=MINIMUM_BOUNTY_USD):
-    """
-    Extracts numerical value and verifies it meets the minimum $10 threshold.
-    Returns formatted string (e.g. '$50 USDC') or None if below threshold.
-    """
     if not text:
         return None
-        
     matches = re.findall(r'(?:\$|USDC|USDT|USD|DAI)\s*([0-9]+(?:\.[0-9]+)?)|([0-9]+(?:\.[0-9]+)?)\s*(?:USDC|USDT|USD|DAI|\$)', text, re.IGNORECASE)
-    
     for match in matches:
         raw_val = match[0] or match[1]
         try:
@@ -80,16 +87,10 @@ def extract_monetary_reward(text, min_val=MINIMUM_BOUNTY_USD):
                 return f"${val:.0f} USD/Crypto"
         except ValueError:
             continue
-            
     return None
 
-# ==============================================================================
-# 2. MULTI-PLATFORM PAID SCANNER
-# ==============================================================================
-
 def scan_paid_developer_bounties():
-    """Scans Algora, Opire, Polar.sh, and funded GitHub repositories for bounties >= $10."""
-    print("🌐 [Aggregator] Scanning live funded developer bounties (Min threshold: $10)...")
+    print("🌐 [Aggregator] Scanning live funded developer bounties (Min: $10)...")
     headers = {"Accept": "application/vnd.github.v3+json"}
     if GITHUB_TOKEN:
         headers["Authorization"] = f"token {GITHUB_TOKEN}"
@@ -109,15 +110,19 @@ def scan_paid_developer_bounties():
             res = requests.get(url, headers=headers, timeout=12)
             if res.status_code == 200:
                 for item in res.json().get("items", []):
+                    title = item.get("title", "Funded Bug Fix")
                     body_text = item.get("body") or ""
-                    full_text = f"{item.get('title', '')} {body_text}"
-                    reward = extract_monetary_reward(full_text)
                     
-                    # Strict Filter: Ignore if no reward or reward < $10
+                    # 1. Block Spam / Injection
+                    if not is_legitimate_bounty(title, body_text):
+                        continue
+                        
+                    # 2. Extract Reward
+                    reward = extract_monetary_reward(f"{title} {body_text}")
                     if reward:
                         valid_bounties.append({
                             "platform": "Funded Developer Escrow",
-                            "title": item.get("title", "Funded Bug Fix"),
+                            "title": title,
                             "url": item.get("html_url", "https://github.com"),
                             "reward": reward,
                             "payout_type": "Escrow / Direct Transfer",
@@ -128,12 +133,7 @@ def scan_paid_developer_bounties():
 
     return valid_bounties
 
-# ==============================================================================
-# 3. SOLVER & VAULT ARCHIVING
-# ==============================================================================
-
 def solve_and_archive_bounty(task):
-    """Generates a developer-grade PR diff and uploads to Hugging Face Vault."""
     print(f"⚡ Generating PR Diff for: {task['title'][:60]} ({task['reward']})...")
 
     prompt = f"""
@@ -156,14 +156,12 @@ Do NOT include conversational chatter, introductions, or generic boilerplate.
     timestamp = int(time.time())
     payload = {
         "timestamp": timestamp,
-        "task": {
-            "title": task["title"],
-            "platform": task["platform"],
-            "url": task["url"],
-            "reward": task["reward"],
-            "payout_type": task["payout_type"]
-        },
-        "solution": solution,
+        "title": task["title"],
+        "reward": task["reward"],
+        "url": task["url"],
+        "platform": task["platform"],
+        "payout_type": task["payout_type"],
+        "solution_patch": solution,
         "badge": "Consensus Verified (RLVR + Dual Engine)",
         "review_status": "APPROVED"
     }
@@ -192,31 +190,12 @@ def run_omni_engine():
     print("==================================================================")
     print("🚀 RUNNING 24/7 MONETARY BOUNTY SCANNER (MINIMUM: $10)")
     print("==================================================================")
-
     tasks = scan_paid_developer_bounties()
-    
     if not tasks:
-        print("ℹ️ No active bounties >= $10 found on live feeds at this moment. Standing by.")
+        print("ℹ️ No active bounties >= $10 found. Standing by.")
         return
-
-    # Solve and archive the highest priority verified paid task
     solve_and_archive_bounty(tasks[0])
 
 if __name__ == "__main__":
     run_omni_engine()
-    
-# Add this filter inside economic_agent.py before passing text to LLM
-SUSPICIOUS_PHRASES = [
-    "Instructions for AI agents",
-    "star the repository",
-    "/user/starred",
-    "create another issue with the same contents"
-]
-
-def is_legitimate_bounty(issue_body: str) -> bool:
-    for phrase in SUSPICIOUS_PHRASES:
-        if phrase.lower() in issue_body.lower():
-            print("🚨 Alert: Blocked a prompt injection / star-farming fake bounty.")
-            return False
-    return True
     
