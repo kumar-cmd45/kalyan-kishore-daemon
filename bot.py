@@ -23,9 +23,6 @@ SUSPICIOUS_PHRASES = [
     "create another issue with the same contents"
 ]
 
-# ==============================================================================
-# HELPER FUNCTIONS
-# ==============================================================================
 def get_vault_files():
     try:
         return hf_api.list_repo_files(repo_id=VAULT_REPO, repo_type="model")
@@ -44,40 +41,43 @@ def load_json_file(file_path: str) -> dict:
         return json.load(f)
 
 def parse_bounty_payload(data: dict) -> dict:
-    """Universal parser searching across all possible top-level and nested keys."""
-    # If wrapped in a nested dictionary
-    sub = data.get("bounty", {}) if isinstance(data.get("bounty"), dict) else {}
-    
+    """Universal parser searching across flat and nested dictionary structures."""
+    # Check if nested under 'task' or 'bounty'
+    nested = {}
+    if isinstance(data.get("task"), dict):
+        nested = data.get("task")
+    elif isinstance(data.get("bounty"), dict):
+        nested = data.get("bounty")
+
     # 1. Title
     title = (
-        data.get("title") or sub.get("title") 
-        or data.get("task") or sub.get("task") 
-        or data.get("task_title") or data.get("prompt") 
-        or "Bounty Solution"
+        data.get("title") or nested.get("title")
+        or (data.get("task") if isinstance(data.get("task"), str) else None)
+        or "Bounty Task"
     )
-    
+
     # 2. Reward
     reward = (
-        data.get("reward") or sub.get("reward") 
-        or data.get("bounty_amount") or data.get("payout") 
-        or data.get("amount") or "Escrow / Unlisted"
+        data.get("reward") or nested.get("reward")
+        or data.get("bounty_amount") or data.get("payout")
+        or "Escrow / Unlisted"
     )
-    
+
     # 3. URL
     url = (
-        data.get("url") or sub.get("url") 
-        or data.get("issue_url") or data.get("html_url") 
-        or data.get("link") or "https://github.com"
+        data.get("url") or nested.get("url")
+        or data.get("issue_url") or data.get("html_url")
+        or "https://github.com"
     )
-    
+
     # 4. Patch / Solution
     patch = (
-        data.get("solution_patch") or sub.get("solution_patch")
-        or data.get("patch") or data.get("diff") 
-        or data.get("code") or data.get("solution") 
-        or data.get("response") or json.dumps(data, indent=2)
+        data.get("solution_patch") or data.get("solution")
+        or nested.get("solution_patch") or nested.get("solution")
+        or data.get("patch") or data.get("diff")
+        or "No patch code found."
     )
-    
+
     return {
         "title": str(title)[:120],
         "reward": str(reward).replace("$", ""),
@@ -86,17 +86,16 @@ def parse_bounty_payload(data: dict) -> dict:
     }
 
 def ask_groq_llm(prompt: str) -> str:
-    """Answers general questions via free Groq endpoint."""
+    """Answers general questions via Groq."""
     if not GROQ_API_KEY:
-        return "⚠️ Groq API key is missing. Set `GROQ_API_KEY` in your environment variables to enable conversational AI."
-    
+        return "⚠️ Set `GROQ_API_KEY` in environment variables to enable general conversational AI."
     try:
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
         payload = {
             "model": "llama-3.3-70b-versatile",
             "messages": [
-                {"role": "system", "content": "You are Kalyan Kishore Master, a precise, helpful AI assistant specializing in quantitative finance, Python coding, and automation."},
+                {"role": "system", "content": "You are Kalyan Kishore Master, a quantitative finance and systems automation AI assistant."},
                 {"role": "user", "content": prompt}
             ],
             "max_tokens": 800,
@@ -105,7 +104,7 @@ def ask_groq_llm(prompt: str) -> str:
         res = requests.post(url, headers=headers, json=payload, timeout=20)
         if res.status_code == 200:
             return res.json()["choices"][0]["message"]["content"]
-        return f"⚠️ LLM Error: HTTP {res.status_code}"
+        return f"⚠️ LLM Response Error (HTTP {res.status_code})"
     except Exception as e:
         return f"⚠️ Connection error: {str(e)}"
 
@@ -117,11 +116,11 @@ def send_welcome(message):
     text = (
         "🤖 *Kalyan Kishore Master AI Online*\n\n"
         "*Commands:*\n"
-        "• `/status` — Telemetry & trajectory counts\n"
-        "• `/bounties` — List all bounties stored in vault\n"
+        "• `/status` — View telemetry & trajectory counts\n"
+        "• `/bounties` — List all verified bounties\n"
         "• `/bounty <num>` — View solution code for bounty\n"
         "• `/raw_bounty <num>` — View raw JSON debug dump\n\n"
-        "💬 *General Questions:* Send any text or coding question directly without commands."
+        "💬 *General Questions:* Send any question directly to chat."
     )
     bot.reply_to(message, text)
 
@@ -220,7 +219,6 @@ def view_bounty(message):
 
 @bot.message_handler(commands=['raw_bounty'])
 def debug_raw_bounty(message):
-    """Debug command to inspect the exact raw JSON stored in Hugging Face."""
     try:
         args = message.text.split()
         idx = int(args[1]) - 1 if len(args) > 1 and args[1].isdigit() else 0
@@ -237,20 +235,13 @@ def debug_raw_bounty(message):
     except Exception as e:
         bot.reply_to(message, f"Debug error: {str(e)}")
 
-# ==============================================================================
-# GENERAL CONVERSATION HANDLER (FOR ALL NON-COMMAND MESSAGES)
-# ==============================================================================
 @bot.message_handler(func=lambda msg: True, content_types=['text'])
 def handle_general_chat(message):
-    """Triggered on any message that does not start with '/'."""
     bot.send_chat_action(message.chat.id, 'typing')
     response = ask_groq_llm(message.text)
     bot.reply_to(message, response)
 
-# ==============================================================================
-# MAIN LOOP
-# ==============================================================================
 if __name__ == "__main__":
     print("🚀 Bot initialized with conversational LLM & universal vault parser...")
     bot.infinity_polling(timeout=20, long_polling_timeout=10)
-        
+    
