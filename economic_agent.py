@@ -13,64 +13,6 @@ from huggingface_hub import HfApi
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
 HF_TOKEN = os.environ.get("HF_TOKEN", "").strip()
-# Safe fallback check for both GITHUB_TOKEN and GITHUB_PAT
-GITHUB_TOKEN = os.environ.get("GITHUB_PAT") or os.environ.get("GITHUB_TOKEN") or ""
-VAULT_REPO = "Kumar5674/kalyan-kishore-vault"
-
-hf_api = HfApi(token=HF_TOKEN) if HF_TOKEN else HfApi()
-
-def call_llm_inference(prompt, system_prompt="You are an expert autonomous software engineer."):
-    """Multi-tiered LLM routing: Groq -> Gemini -> Free Proxy."""
-    # 1. Groq Llama-3.3-70b
-    if GROQ_API_KEY:
-        try:
-            url = "https://api.groq.com/openai/v1/chat/completions"
-            headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-            payload = {
-                "model": "llama-3.3-70b-versatile",
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": prompt}
-                ],
-                "temperature": 0.2
-            }
-            res = requests.post(url, headers=headers, json=payload, timeout=25)
-            if res.status_code == 200:
-                return res.json()["choices"][0]["message"]["content"].strip()
-        except Exception as e:
-            print(f"⚠️ Groq inference notice: {e}")
-
-    # 2. Gemini 2.5 / 1.5 Flash Fallback
-    if GEMINI_API_KEY:
-        try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-            headers = {"Content-Type": "application/json"}
-            payload = {
-                "contents": [{"parts": [{"text": f"{system_prompt}\n\nTask:\n{prompt}"}]}]
-            }
-            res = requests.post(url, headers=headers, json=payload, timeout=25)
-            if res.status_code == 200:
-                return res.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-        except Exception as e:
-            print(f"⚠️ Gemini inference notice: {e}")
-
-    return None
-
-# ==============================================================================
-# KALYAN KISHORE - AUTONOMOUS 24/7 ECONOMIC BOUNTY AGENT (economic_agent.py)
-# Features: Multi-network bounty scan, Gemini/Groq solver, Multi-Judge consensus,
-# Direct Hugging Face Vault Storing.
-# ==============================================================================
-import os
-import time
-import json
-import requests
-from huggingface_hub import HfApi
-
-# 1. Environment Secrets & Tokens (Properly defined variables)
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
-HF_TOKEN = os.environ.get("HF_TOKEN", "").strip()
 GITHUB_TOKEN = os.environ.get("GITHUB_PAT") or os.environ.get("GITHUB_TOKEN") or ""
 VAULT_REPO = "Kumar5674/kalyan-kishore-vault"
 
@@ -227,3 +169,4 @@ def run_omni_engine():
 
 if __name__ == "__main__":
     run_omni_engine()
+    
