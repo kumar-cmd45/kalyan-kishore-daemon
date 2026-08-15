@@ -12,18 +12,46 @@ from groq import Groq
 from google import genai
 from huggingface_hub import HfApi
 
-# 1. Environment Secrets & Wallets
-PAYOUT_WALLET = os.environ.get("PAYOUT_WALLET", "").strip() # MetaMask 0x...
-GITHUB_TOKEN = os.environ.get("GITHUB_PAT", "").strip()
-GROQ_KEY = os.environ.get("GROQ_API_KEY", "").strip()
-GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
-HF_TOKEN = os.environ.get("HF_TOKEN", "").strip()
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-VAULT_REPO = "Kumar5674/kalyan-kishore-vault"
+# 1. Add secret reading at top
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
 
-groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
-gemini_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
-hf_api = HfApi(token=HF_TOKEN) if HF_TOKEN else None
+# 2. Update dispatch function
+def dispatch_telegram(task: dict, solution: str, consensus_badge: str):
+    if not TELEGRAM_TOKEN:
+        return
+    try:
+        # Use explicit Chat ID if set, fallback to dynamic polling
+        chat_id = TELEGRAM_CHAT_ID
+        if not chat_id:
+            u_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
+            res = requests.get(u_url, timeout=5).json()
+            if res.get("result"):
+                chat_id = res["result"][-1]["message"]["chat"]["id"]
+
+        if not chat_id:
+            print("⚠️ Notice: Could not resolve TELEGRAM_CHAT_ID.")
+            return
+
+        wallet_txt = f"🦊 `{PAYOUT_WALLET[:6]}...{PAYOUT_WALLET[-4:]}`" if PAYOUT_WALLET else "Stripe / Standard"
+
+        msg = (
+            f"💰 *New Verified Bounty Ready to Claim!*\n\n"
+            f"• *Platform:* `{task['platform']}`\n"
+            f"• *Reward:* `{task['reward']}`\n"
+            f"• *Payout Type:* `{task['payout_type']}` ({wallet_txt})\n"
+            f"• *Verification:* `{consensus_badge}`\n"
+            f"• *Task Title:* [{task['title'][:65]}]({task['url']})\n\n"
+            f"📝 *Pre-Verified Solution (Ready to Paste):*\n"
+            f"```\n{solution[:1100]}\n```\n\n"
+            f"👉 [Tap to Open Task & Submit Solution]({task['url']})"
+        )
+
+        send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        requests.post(send_url, json={"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"}, timeout=8)
+        print(f"📱 1-Tap Bounty solution dispatched directly to Telegram chat {chat_id}!")
+    except Exception as e:
+        print(f"⚠️ Telegram dispatch error: {e}")
+
 
 # ==============================================================================
 # 2. OMNI-STREAM SCANNERS (Web2 & Web3 Platforms)
